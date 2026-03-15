@@ -28,6 +28,7 @@ namespace string_bimap {
 // - IDs are monotonically assigned and never reused.
 // - Deleting a string removes it logically; the old ID becomes a permanent hole.
 // - compact() preserves all live IDs and may rewrite internal storage.
+// - Empty strings are ignored and never stored.
 // - get_string(), for_each_live(), and for_each_with_prefix() return string_views
 //   into internal storage. Any mutating operation or compact() invalidates them.
 // - Thread safety is external. Concurrent mutation or mutation during iteration is unsupported.
@@ -43,6 +44,9 @@ public:
 
     // Returns the stable ID of a live string if present.
     [[nodiscard]] std::optional<StringId> find_id(std::string_view value) const {
+        if (value.empty()) {
+            return std::nullopt;
+        }
         if (auto id = delta_.find_id(value)) {
             if (!tombstones_.contains(*id)) {
                 return id;
@@ -81,10 +85,14 @@ public:
         return delta_.contains_id(id) || base_.contains_id(id);
     }
 
-    // Inserts a string if it is not already live and returns its stable ID.
+    // Inserts a non-empty string if it is not already live and returns its stable ID.
     // If the string already exists live, the existing ID is returned.
+    // Empty strings are ignored and return kInvalidId.
     // IDs are never reused after deletion.
     [[nodiscard]] StringId insert(std::string_view value) {
+        if (value.empty()) {
+            return kInvalidId;
+        }
         if (const auto existing = find_id(value)) {
             return *existing;
         }
@@ -113,6 +121,9 @@ public:
     }
 
     bool erase(std::string_view value) {
+        if (value.empty()) {
+            return false;
+        }
         const auto id = find_id(value);
         return id.has_value() && erase(*id);
     }
@@ -327,8 +338,11 @@ public:
             std::filesystem::exists(detail::compact_ids_sidecar_path(path));
         const bool has_fst_sidecar =
             std::filesystem::exists(detail::compact_fst_sidecar_path(path));
+        const bool has_keyvi_sidecar =
+            std::filesystem::exists(detail::compact_keyvi_sidecar_path(path));
         if ((profile == BackendProfile::CompactMemory && has_xcdat_sidecars) ||
             (profile == BackendProfile::CompactMemoryMarisa && has_marisa_sidecars) ||
+            (profile == BackendProfile::CompactMemoryKeyvi && has_keyvi_sidecar) ||
             (profile == BackendProfile::CompactMemoryFst && has_fst_sidecar)) {
             loaded_native_compact = dict.base_.load_native_compact_index(std::move(items), path);
         }
@@ -336,6 +350,7 @@ public:
             dict.base_.rebuild(std::move(items));
             if ((profile == BackendProfile::CompactMemory ||
                  profile == BackendProfile::CompactMemoryMarisa ||
+                 profile == BackendProfile::CompactMemoryKeyvi ||
                  profile == BackendProfile::CompactMemoryFst) &&
                 dict.base_.has_native_compact_index()) {
                 dict.base_.save_native_compact_index(path);

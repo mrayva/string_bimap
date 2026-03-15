@@ -29,7 +29,7 @@ using string_bimap::StringId;
         "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
         "0123456789_-:/.";
 
-    std::uniform_int_distribution<std::size_t> length_dist(0, max_len);
+    std::uniform_int_distribution<std::size_t> length_dist(1, max_len);
     std::uniform_int_distribution<std::size_t> char_dist(0, sizeof(alphabet) - 2);
 
     const std::size_t len = length_dist(rng);
@@ -54,6 +54,8 @@ void expect(bool condition, const char* message) {
             return path + ".compact.xcdat";
         case BackendProfile::CompactMemoryMarisa:
             return path + ".compact.marisa";
+        case BackendProfile::CompactMemoryKeyvi:
+            return path + ".compact.keyvi";
         case BackendProfile::CompactMemoryFst:
             return path + ".compact.fst";
         case BackendProfile::FastLookup:
@@ -72,29 +74,46 @@ void for_each_profile(Fn&& fn) {
     fn(BackendProfile::FastLookup);
     fn(BackendProfile::CompactMemory);
     fn(BackendProfile::CompactMemoryMarisa);
+    fn(BackendProfile::CompactMemoryKeyvi);
     fn(BackendProfile::CompactMemoryFst);
+}
+
+void test_empty_strings_are_ignored(BackendProfile profile) {
+    StringBimap dict(0, profile);
+
+    expect(!dict.find_id("").has_value(), "empty string should never be found");
+    expect(!dict.contains(""), "empty string should never be contained");
+    expect(dict.insert("") == string_bimap::kInvalidId, "empty insert should return invalid id");
+    expect(!dict.contains_id(string_bimap::kInvalidId), "invalid id should not become live");
+    expect(!dict.erase(""), "erase empty string should fail");
+    expect(dict.live_size() == 0, "empty string should not change live size");
+
+    dict.compact();
+
+    expect(!dict.find_id("").has_value(), "empty string should remain absent after compaction");
 }
 
 void test_basic_insert_erase_compact(BackendProfile profile) {
     StringBimap dict(0, profile);
     expect(dict.backend_profile() == profile, "backend profile should round-trip through construction");
 
-    const auto empty_id = dict.insert("");
     const auto apple_id = dict.insert("apple");
     const auto banana_id = dict.insert("banana");
     const auto duplicate_apple = dict.insert("apple");
 
     expect(apple_id == duplicate_apple, "duplicate insert should reuse id");
     expect(dict.contains("apple"), "apple should exist");
-    expect(dict.find_id("banana").value() == banana_id, "banana id mismatch");
+    {
+        const auto id = dict.find_id("banana");
+        expect(id.has_value() && *id == banana_id, "banana id mismatch");
+    }
     expect(dict.get_string(apple_id) == std::string_view("apple"), "apple value mismatch");
-    expect(dict.get_string(empty_id) == std::string_view(""), "empty string mismatch");
-    expect(dict.live_size() == 3, "live size should count unique live strings");
+    expect(dict.live_size() == 2, "live size should count unique live strings");
 
     expect(dict.erase(apple_id), "erase by id should succeed");
     expect(!dict.contains("apple"), "apple should be absent after erase");
     expect(dict.get_string(apple_id).empty(), "erased id should decode to empty view");
-    expect(dict.live_size() == 2, "live size should shrink after erase");
+    expect(dict.live_size() == 1, "live size should shrink after erase");
 
     const auto carrot_id = dict.insert("carrot");
     expect(dict.contains("carrot"), "carrot should exist");
@@ -102,13 +121,18 @@ void test_basic_insert_erase_compact(BackendProfile profile) {
 
     dict.compact();
 
-    expect(dict.find_id("banana").value() == banana_id, "banana id should survive compaction");
+    {
+        const auto id = dict.find_id("banana");
+        expect(id.has_value() && *id == banana_id, "banana id should survive compaction");
+    }
     expect(dict.get_string(banana_id) == std::string_view("banana"), "banana value should survive compaction");
-    expect(dict.find_id("carrot").value() == carrot_id, "carrot id should survive compaction");
+    {
+        const auto id = dict.find_id("carrot");
+        expect(id.has_value() && *id == carrot_id, "carrot id should survive compaction");
+    }
     expect(dict.get_string(carrot_id) == std::string_view("carrot"), "carrot value should survive compaction");
     expect(!dict.contains("apple"), "apple should remain absent after compaction");
-    expect(dict.get_string(empty_id) == std::string_view(""), "empty string should survive compaction");
-    expect(dict.live_size() == 3, "live size should remain correct after compaction");
+    expect(dict.live_size() == 2, "live size should remain correct after compaction");
 }
 
 void test_delete_reinsert_gets_new_id(BackendProfile profile) {
@@ -125,7 +149,10 @@ void test_delete_reinsert_gets_new_id(BackendProfile profile) {
 
     dict.compact();
 
-    expect(dict.find_id("alpha").value() == id2, "latest id should survive compaction");
+    {
+        const auto id = dict.find_id("alpha");
+        expect(id.has_value() && *id == id2, "latest id should survive compaction");
+    }
     expect(dict.get_string(id1).empty(), "old tombstoned id should remain absent after compaction");
     expect(dict.get_string(id2) == std::string_view("alpha"), "new id should still decode after compaction");
 }
@@ -167,7 +194,10 @@ void test_compaction_preserves_live_ids_over_many_cycles(BackendProfile profile)
         dict.compact();
 
         for (const auto& [key, id] : ids) {
-            expect(dict.find_id(key).value() == id, "live id should remain stable across compaction");
+            {
+                const auto found = dict.find_id(key);
+                expect(found.has_value() && *found == id, "live id should remain stable across compaction");
+            }
             expect(dict.get_string(id) == key, "live string should remain decodable across compaction");
         }
     }
@@ -257,7 +287,6 @@ void test_randomized_model(BackendProfile profile) {
 void test_serialization_round_trip_stream(BackendProfile profile) {
     StringBimap dict(0, profile);
 
-    const auto empty_id = dict.insert("");
     const auto alpha_id = dict.insert("alpha");
     const auto beta_id = dict.insert("beta");
     const auto gamma_id = dict.insert("gamma");
@@ -274,10 +303,18 @@ void test_serialization_round_trip_stream(BackendProfile profile) {
     expect(restored.backend_profile() == profile, "serialized profile should round-trip");
     expect(restored.size() == dict.size(), "serialized next_id should round-trip");
     expect(restored.live_size() == dict.live_size(), "serialized live size should round-trip");
-    expect(restored.get_string(empty_id) == std::string_view(""), "empty string should round-trip");
-    expect(restored.find_id("alpha").value() == alpha_id, "alpha id should round-trip");
-    expect(restored.find_id("gamma").value() == gamma_id, "gamma id should round-trip");
-    expect(restored.find_id("delta").value() == delta_id, "delta id should round-trip");
+    {
+        const auto id = restored.find_id("alpha");
+        expect(id.has_value() && *id == alpha_id, "alpha id should round-trip");
+    }
+    {
+        const auto id = restored.find_id("gamma");
+        expect(id.has_value() && *id == gamma_id, "gamma id should round-trip");
+    }
+    {
+        const auto id = restored.find_id("delta");
+        expect(id.has_value() && *id == delta_id, "delta id should round-trip");
+    }
     expect(!restored.contains("beta"), "deleted key should remain absent after load");
     expect(!restored.contains_id(beta_id), "deleted id hole should remain absent after load");
 }
@@ -302,6 +339,12 @@ void test_serialization_round_trip_file(BackendProfile profile) {
     ids.emplace("tail", tail_id);
 
     const std::string path = "/tmp/string_bimap_roundtrip.bin";
+    std::filesystem::remove(path);
+    std::filesystem::remove(path + ".compact.xcdat");
+    std::filesystem::remove(path + ".compact.marisa");
+    std::filesystem::remove(path + ".compact.keyvi");
+    std::filesystem::remove(path + ".compact.fst");
+    std::filesystem::remove(path + ".compact.ids");
     dict.save(path);
     auto restored = StringBimap::load(path);
 
@@ -309,9 +352,19 @@ void test_serialization_round_trip_file(BackendProfile profile) {
     expect(restored.size() == dict.size(), "file round-trip should preserve next_id");
     expect(restored.live_size() == ids.size(), "file round-trip should preserve live count");
     for (const auto& [key, id] : ids) {
-        expect(restored.find_id(key).value() == id, "file round-trip should preserve ids");
+        {
+            const auto found = restored.find_id(key);
+            expect(found.has_value() && *found == id, "file round-trip should preserve ids");
+        }
         expect(restored.get_string(id) == key, "file round-trip should preserve decoded values");
     }
+
+    std::filesystem::remove(path);
+    std::filesystem::remove(path + ".compact.xcdat");
+    std::filesystem::remove(path + ".compact.marisa");
+    std::filesystem::remove(path + ".compact.keyvi");
+    std::filesystem::remove(path + ".compact.fst");
+    std::filesystem::remove(path + ".compact.ids");
 }
 
 void test_compact_native_sidecars() {
@@ -328,6 +381,7 @@ void test_compact_native_sidecars() {
         std::filesystem::remove(path);
         std::filesystem::remove(path + ".compact.xcdat");
         std::filesystem::remove(path + ".compact.marisa");
+        std::filesystem::remove(path + ".compact.keyvi");
         std::filesystem::remove(ids_path);
 
         dict.save(path);
@@ -340,12 +394,19 @@ void test_compact_native_sidecars() {
         }
 
         auto restored = StringBimap::load(path);
-        expect(restored.find_id("alpha").value() == alpha, "native compact load should preserve alpha");
-        expect(restored.find_id("beta").value() == beta, "native compact load should preserve beta");
+        {
+            const auto id = restored.find_id("alpha");
+            expect(id.has_value() && *id == alpha, "native compact load should preserve alpha");
+        }
+        {
+            const auto id = restored.find_id("beta");
+            expect(id.has_value() && *id == beta, "native compact load should preserve beta");
+        }
 
         std::filesystem::remove(path);
         std::filesystem::remove(path + ".compact.xcdat");
         std::filesystem::remove(path + ".compact.marisa");
+        std::filesystem::remove(path + ".compact.keyvi");
         std::filesystem::remove(ids_path);
     };
 #if defined(STRING_BIMAP_HAS_XCDAT)
@@ -353,6 +414,9 @@ void test_compact_native_sidecars() {
 #endif
 #if defined(STRING_BIMAP_HAS_MARISA)
     run(BackendProfile::CompactMemoryMarisa);
+#endif
+#if defined(STRING_BIMAP_HAS_KEYVI)
+    run(BackendProfile::CompactMemoryKeyvi);
 #endif
     run(BackendProfile::CompactMemoryFst);
 #endif
@@ -373,6 +437,7 @@ void test_save_compacted_preserves_ids_and_sidecars() {
         std::filesystem::remove(path);
         std::filesystem::remove(path + ".compact.xcdat");
         std::filesystem::remove(path + ".compact.marisa");
+        std::filesystem::remove(path + ".compact.keyvi");
         std::filesystem::remove(ids_path);
 
         dict.save_compacted(path);
@@ -385,14 +450,21 @@ void test_save_compacted_preserves_ids_and_sidecars() {
         }
 
         auto restored = StringBimap::load(path);
-        expect(restored.find_id("alpha").value() == alpha, "save_compacted should preserve alpha id");
-        expect(restored.find_id("gamma").value() == gamma, "save_compacted should preserve gamma id");
+        {
+            const auto id = restored.find_id("alpha");
+            expect(id.has_value() && *id == alpha, "save_compacted should preserve alpha id");
+        }
+        {
+            const auto id = restored.find_id("gamma");
+            expect(id.has_value() && *id == gamma, "save_compacted should preserve gamma id");
+        }
         expect(!restored.contains("beta"), "save_compacted should preserve deleted beta");
         expect(!restored.contains_id(beta), "save_compacted should preserve deleted beta hole");
 
         std::filesystem::remove(path);
         std::filesystem::remove(path + ".compact.xcdat");
         std::filesystem::remove(path + ".compact.marisa");
+        std::filesystem::remove(path + ".compact.keyvi");
         std::filesystem::remove(ids_path);
     };
 #if defined(STRING_BIMAP_HAS_XCDAT)
@@ -400,6 +472,9 @@ void test_save_compacted_preserves_ids_and_sidecars() {
 #endif
 #if defined(STRING_BIMAP_HAS_MARISA)
     run(BackendProfile::CompactMemoryMarisa);
+#endif
+#if defined(STRING_BIMAP_HAS_KEYVI)
+    run(BackendProfile::CompactMemoryKeyvi);
 #endif
     run(BackendProfile::CompactMemoryFst);
 #endif
@@ -409,7 +484,6 @@ void test_iteration_api(BackendProfile profile) {
     StringBimap dict(0, profile);
 
     const auto alpha = dict.insert("alpha");
-    const auto empty = dict.insert("");
     const auto beta = dict.insert("beta");
     expect(dict.erase(beta), "erase before iteration should succeed");
     const auto gamma = dict.insert("gamma");
@@ -419,10 +493,9 @@ void test_iteration_api(BackendProfile profile) {
         seen.emplace_back(id, std::string(value));
     });
 
-    expect(seen.size() == 3, "iteration should visit only live entries");
+    expect(seen.size() == 2, "iteration should visit only live entries");
     expect((seen == std::vector<std::pair<StringId, std::string>>{
                         {alpha, "alpha"},
-                        {empty, ""},
                         {gamma, "gamma"},
                     }),
            "iteration should be in stable id order");
@@ -455,7 +528,6 @@ void test_prefix_query_api(BackendProfile profile) {
     const auto apple = dict.insert("apple");
     const auto apricot = dict.insert("apricot");
     const auto banana = dict.insert("banana");
-    const auto empty = dict.insert("");
     expect(dict.erase(apricot), "erase before prefix query should succeed");
 
     std::vector<std::pair<StringId, std::string>> seen;
@@ -476,7 +548,6 @@ void test_prefix_query_api(BackendProfile profile) {
                             {app, "app"},
                             {apple, "apple"},
                             {banana, "banana"},
-                            {empty, ""},
                         }),
            "empty prefix should visit all live entries");
 
@@ -518,6 +589,9 @@ void test_backend_profile_explicit_selection() {
     StringBimap marisa(0, BackendProfile::CompactMemoryMarisa);
     expect(marisa.backend_profile() == BackendProfile::CompactMemoryMarisa, "marisa profile should be selectable");
 
+    StringBimap keyvi(0, BackendProfile::CompactMemoryKeyvi);
+    expect(keyvi.backend_profile() == BackendProfile::CompactMemoryKeyvi, "keyvi profile should be selectable");
+
     StringBimap fst(0, BackendProfile::CompactMemoryFst);
     expect(fst.backend_profile() == BackendProfile::CompactMemoryFst, "fst profile should be selectable");
 }
@@ -527,6 +601,7 @@ void test_backend_profile_explicit_selection() {
 int main() {
     test_backend_profile_explicit_selection();
     for_each_profile([](BackendProfile profile) {
+        test_empty_strings_are_ignored(profile);
         test_basic_insert_erase_compact(profile);
         test_delete_reinsert_gets_new_id(profile);
         test_contains_id_and_invalid_erases(profile);

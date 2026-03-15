@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <chrono>
 #include <cstddef>
 #include <fstream>
 #include <memory>
@@ -23,6 +24,10 @@
 #if defined(STRING_BIMAP_HAS_MARISA)
 #include <marisa.h>
 #endif
+#if defined(STRING_BIMAP_HAS_KEYVI)
+#include <keyvi/dictionary/dictionary.h>
+#include <keyvi/dictionary/dictionary_types.h>
+#endif
 
 namespace string_bimap {
 
@@ -35,6 +40,15 @@ public:
 
     explicit BaseSegment(BackendProfile profile = BackendProfile::FastLookup)
         : profile_(profile) {}
+
+    BaseSegment(const BaseSegment&) = delete;
+    BaseSegment& operator=(const BaseSegment&) = delete;
+    BaseSegment(BaseSegment&&) noexcept = default;
+    BaseSegment& operator=(BaseSegment&&) noexcept = default;
+
+    ~BaseSegment() {
+        release_keyvi_sidecar();
+    }
 
     void set_backend_profile(BackendProfile profile) {
         profile_ = profile;
@@ -58,6 +72,19 @@ public:
                 return std::nullopt;
             }
             return local_to_global_[agent.key().id()];
+        }
+#endif
+ #if defined(STRING_BIMAP_HAS_KEYVI)
+        if (use_keyvi_index()) {
+            const std::string key(value);
+            if (!keyvi_dictionary_->Contains(key)) {
+                return std::nullopt;
+            }
+            const auto match = (*keyvi_dictionary_)[key];
+            if (!match) {
+                return std::nullopt;
+            }
+            return parse_string_id(match->GetValueAsString());
         }
 #endif
         if (use_fst_index()) {
@@ -106,6 +133,11 @@ public:
             usage.compact_index_bytes += marisa_trie_.total_size();
         }
 #endif
+ #if defined(STRING_BIMAP_HAS_KEYVI)
+        if (use_keyvi_index()) {
+            usage.compact_index_bytes += keyvi_sidecar_size_bytes_;
+        }
+#endif
         if (use_fst_index()) {
             usage.compact_index_bytes += fst_bytecode_.capacity();
         }
@@ -120,6 +152,11 @@ public:
 #endif
 #if defined(STRING_BIMAP_HAS_MARISA)
         if (profile_ == BackendProfile::CompactMemoryMarisa && marisa_ready_) {
+            return true;
+        }
+#endif
+ #if defined(STRING_BIMAP_HAS_KEYVI)
+        if (profile_ == BackendProfile::CompactMemoryKeyvi && keyvi_dictionary_) {
             return true;
         }
 #endif
@@ -141,6 +178,15 @@ public:
         if (use_marisa_index()) {
             marisa_trie_.save(detail::compact_marisa_sidecar_path(path).c_str());
             detail::write_vector_file(detail::compact_ids_sidecar_path(path), local_to_global_);
+            return;
+        }
+#endif
+ #if defined(STRING_BIMAP_HAS_KEYVI)
+        if (use_keyvi_index()) {
+            std::filesystem::copy_file(
+                keyvi_sidecar_path_,
+                detail::compact_keyvi_sidecar_path(path),
+                std::filesystem::copy_options::overwrite_existing);
             return;
         }
 #endif
@@ -196,6 +242,26 @@ public:
                 marisa_trie_.clear();
                 local_to_global_.clear();
                 marisa_ready_ = false;
+                return false;
+            }
+        }
+#endif
+ #if defined(STRING_BIMAP_HAS_KEYVI)
+        if (profile_ == BackendProfile::CompactMemoryKeyvi) {
+            try {
+                rebuild_storage(items);
+                fallback_index_.clear();
+                release_keyvi_sidecar();
+                keyvi_sidecar_path_ = detail::compact_keyvi_sidecar_path(path);
+                keyvi_dictionary_ = std::make_unique<keyvi::dictionary::Dictionary>(keyvi_sidecar_path_);
+                keyvi_sidecar_size_bytes_ = file_size_or_zero(keyvi_sidecar_path_);
+                keyvi_owns_sidecar_ = false;
+                return true;
+            } catch (...) {
+                keyvi_dictionary_.reset();
+                keyvi_sidecar_path_.clear();
+                keyvi_sidecar_size_bytes_ = 0;
+                keyvi_owns_sidecar_ = false;
                 return false;
             }
         }
@@ -260,6 +326,23 @@ public:
             return;
         }
 #endif
+ #if defined(STRING_BIMAP_HAS_KEYVI)
+        if (use_keyvi_index()) {
+            std::vector<StringId> ids;
+            const auto matches = keyvi_dictionary_->GetPrefixCompletion(std::string(prefix));
+            for (auto it = matches.begin(); it != matches.end(); ++it) {
+                if (!*it) {
+                    continue;
+                }
+                ids.push_back(parse_string_id((*it)->GetValueAsString()));
+            }
+            std::sort(ids.begin(), ids.end());
+            for (const auto id : ids) {
+                func(id, get_string(id));
+            }
+            return;
+        }
+#endif
         if (use_fst_index()) {
             std::vector<StringId> ids;
             fst_map_->predictive_search(prefix, [&](const std::string&, const StringId& id) {
@@ -304,6 +387,19 @@ public:
                 if (id != kInvalidId) {
                     func(id, get_string(id));
                 }
+            }
+            return;
+        }
+#endif
+ #if defined(STRING_BIMAP_HAS_KEYVI)
+        if (use_keyvi_index()) {
+            const auto matches = keyvi_dictionary_->GetPrefixCompletion(std::string(prefix));
+            for (auto it = matches.begin(); it != matches.end(); ++it) {
+                if (!*it) {
+                    continue;
+                }
+                const auto id = parse_string_id((*it)->GetValueAsString());
+                func(id, get_string(id));
             }
             return;
         }
@@ -368,8 +464,46 @@ private:
 #endif
     }
 
+    [[nodiscard]] bool use_keyvi_index() const noexcept {
+#if defined(STRING_BIMAP_HAS_KEYVI)
+        return profile_ == BackendProfile::CompactMemoryKeyvi && static_cast<bool>(keyvi_dictionary_);
+#else
+        return false;
+#endif
+    }
+
     [[nodiscard]] bool use_fst_index() const noexcept {
         return profile_ == BackendProfile::CompactMemoryFst && static_cast<bool>(fst_map_);
+    }
+
+    static StringId parse_string_id(const std::string& value) {
+        return static_cast<StringId>(std::stoull(value));
+    }
+
+    static std::size_t file_size_or_zero(const std::string& path) noexcept {
+        std::error_code ec;
+        const auto size = std::filesystem::file_size(path, ec);
+        return ec ? 0 : static_cast<std::size_t>(size);
+    }
+
+    static std::string make_temp_keyvi_sidecar_path() {
+        const auto stamp = static_cast<unsigned long long>(
+            std::chrono::steady_clock::now().time_since_epoch().count());
+        return (std::filesystem::temp_directory_path() /
+                ("string_bimap-keyvi-" + std::to_string(stamp) + ".kv")).string();
+    }
+
+    void release_keyvi_sidecar() noexcept {
+#if defined(STRING_BIMAP_HAS_KEYVI)
+        keyvi_dictionary_.reset();
+        if (keyvi_owns_sidecar_ && !keyvi_sidecar_path_.empty()) {
+            std::error_code ec;
+            std::filesystem::remove(keyvi_sidecar_path_, ec);
+        }
+        keyvi_sidecar_path_.clear();
+        keyvi_sidecar_size_bytes_ = 0;
+        keyvi_owns_sidecar_ = false;
+#endif
     }
 
     void build_lookup(const std::vector<BuildItem>& items) {
@@ -394,14 +528,28 @@ private:
 
         std::vector<std::string> keys;
         keys.reserve(sorted_keys.size());
-        bool has_empty_key = false;
         for (const auto& item : sorted_keys) {
             keys.push_back(item.first);
-            has_empty_key = has_empty_key || item.first.empty();
         }
 
 #if defined(STRING_BIMAP_HAS_XCDAT)
         trie_.reset();
+#endif
+#if defined(STRING_BIMAP_HAS_MARISA)
+        marisa_trie_.clear();
+        marisa_ready_ = false;
+#endif
+#if defined(STRING_BIMAP_HAS_KEYVI)
+        release_keyvi_sidecar();
+#endif
+        fst_map_.reset();
+        fst_bytecode_.clear();
+
+        if (sorted_keys.empty()) {
+            return;
+        }
+
+#if defined(STRING_BIMAP_HAS_XCDAT)
         if (profile_ == BackendProfile::CompactMemory) {
             trie_ = TrieType(keys);
             local_to_global_.assign(keys.size(), kInvalidId);
@@ -418,8 +566,6 @@ private:
         }
 #endif
 #if defined(STRING_BIMAP_HAS_MARISA)
-        marisa_trie_.clear();
-        marisa_ready_ = false;
         if (profile_ == BackendProfile::CompactMemoryMarisa) {
             marisa::Keyset keyset;
             for (const auto& key : keys) {
@@ -440,9 +586,22 @@ private:
             release_fallback_index();
         }
 #endif
-        fst_map_.reset();
-        fst_bytecode_.clear();
-        if (profile_ == BackendProfile::CompactMemoryFst && !has_empty_key) {
+#if defined(STRING_BIMAP_HAS_KEYVI)
+        if (profile_ == BackendProfile::CompactMemoryKeyvi) {
+            keyvi::dictionary::IntDictionaryCompiler compiler;
+            for (const auto& item : sorted_keys) {
+                compiler.Add(item.first, item.second);
+            }
+            compiler.Compile();
+            keyvi_sidecar_path_ = make_temp_keyvi_sidecar_path();
+            compiler.WriteToFile(keyvi_sidecar_path_);
+            keyvi_dictionary_ = std::make_unique<keyvi::dictionary::Dictionary>(keyvi_sidecar_path_);
+            keyvi_sidecar_size_bytes_ = file_size_or_zero(keyvi_sidecar_path_);
+            keyvi_owns_sidecar_ = true;
+            release_fallback_index();
+        }
+#endif
+        if (profile_ == BackendProfile::CompactMemoryFst) {
             std::vector<std::pair<std::string, StringId>> fst_items;
             fst_items.reserve(sorted_keys.size());
             for (const auto& item : sorted_keys) {
@@ -475,6 +634,12 @@ private:
 #if defined(STRING_BIMAP_HAS_MARISA)
     marisa::Trie marisa_trie_;
     bool marisa_ready_ = false;
+#endif
+#if defined(STRING_BIMAP_HAS_KEYVI)
+    std::unique_ptr<keyvi::dictionary::Dictionary> keyvi_dictionary_;
+    std::string keyvi_sidecar_path_;
+    std::size_t keyvi_sidecar_size_bytes_ = 0;
+    bool keyvi_owns_sidecar_ = false;
 #endif
     using FstMapType = fst::map<StringId>;
     std::string fst_bytecode_;

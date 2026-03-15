@@ -16,6 +16,7 @@ The design is:
   - `FastLookup`: fallback map-based indexing
   - `CompactMemory`: optional `xcdat` for the base when compiled in
   - `CompactMemoryMarisa`: optional `marisa-trie` for the base when compiled in
+  - `CompactMemoryKeyvi`: optional `keyvi` for the base when compiled in
 - mutable delta segment backed by a packed arena plus:
   - `FastLookup`: `std::unordered_map`
   - compact profiles: optional `hat-trie` when compiled in
@@ -27,6 +28,7 @@ The backend is selected per dictionary:
 string_bimap::StringBimap fast(0, string_bimap::BackendProfile::FastLookup);
 string_bimap::StringBimap compact(0, string_bimap::BackendProfile::CompactMemory);
 string_bimap::StringBimap marisa(0, string_bimap::BackendProfile::CompactMemoryMarisa);
+string_bimap::StringBimap keyvi(0, string_bimap::BackendProfile::CompactMemoryKeyvi);
 ```
 
 If optional dependencies are not compiled in, the compact profiles degrade gracefully to the fallback structures for the missing parts.
@@ -41,6 +43,7 @@ If optional dependencies are not compiled in, the compact profiles degrade grace
 - `save()`/`load()` preserve the selected backend profile.
 - `save(path)` may emit compact sidecars for `BackendProfile::CompactMemory` when the on-disk snapshot is fully compacted.
 - `load(path)` will use those sidecars when present; otherwise it falls back to logical rebuild and may generate the sidecars for later loads.
+- Empty strings are ignored and never stored.
 
 ## Lifetime And Safety Rules
 
@@ -51,7 +54,7 @@ If optional dependencies are not compiled in, the compact profiles degrade grace
 - `for_each_with_prefix()` returns results in stable ID order.
 - `for_each_with_prefix_unordered()` may return results in backend/native order and is intended for faster prefix scans.
 - The library is not internally synchronized. External locking is required for concurrent access if mutation is possible.
-- `get_string(id)` returns an empty view for a missing or deleted ID. That means an empty return value alone does not distinguish a stored empty string from an absent ID; use `contains_id(id)` when that distinction matters.
+- `get_string(id)` returns an empty view for a missing or deleted ID.
 
 ## Build
 
@@ -64,6 +67,8 @@ ctest --test-dir build --output-on-failure
 If `xcdat.hpp` is available through your toolchain or include path, the build enables the `CompactMemory` static backend. Otherwise that profile falls back to the standard-library static index.
 
 If `marisa.h` and `libmarisa` are available through your toolchain or include path, the build enables the `CompactMemoryMarisa` static backend. Otherwise that profile falls back to the standard-library static index.
+
+If `keyvi` headers and dependencies are available, the build enables the `CompactMemoryKeyvi` static backend. This repo supports pointing CMake at a local checkout with `-DSTRING_BIMAP_KEYVI_ROOT=/path/to/keyvi`.
 
 If `tsl/htrie_map.h` is available through your toolchain or include path, the build enables the optional compact-memory delta backend. Otherwise that profile falls back to `std::unordered_map`.
 
@@ -114,6 +119,7 @@ On the benchmarked real datasets so far:
 - `FastLookup` is still the default recommendation for point-query-heavy workloads.
 - `CompactMemoryMarisa` currently looks like the stronger experimental compact backend overall.
 - `CompactMemory` (`xcdat`) is still competitive on shorter identifier-like corpora where it can be slightly smaller.
+- `CompactMemoryKeyvi` is kept as an experimental backend only. On the completed stock/SEC runs it underperformed both `marisa` and usually `xcdat`, and an attempted Wikipedia compact run was still running after `4m19s` at roughly `7.0 GB RSS`.
 - `CompactMemoryFst` is now available as an experimental FST backend, but current results do not make it a preferred choice.
 
 The table below summarizes the stock-style real-dataset results from the dependency-backed build. Times are nanoseconds per operation; memory is the internal post-load estimate reported by `memory_usage()`.
@@ -266,6 +272,8 @@ The Wikipedia rows were produced with:
   --serialized-file /tmp/string_bimap_enwiki_fst.bin
 ```
 
+For `keyvi`, the same Wikipedia command shape was attempted through `build-keyvi` with `--profile keyvi`, but the run was stopped after `4m19s` at roughly `7.0 GB RSS` without reaching the benchmark summary. That result was materially worse than the completed `marisa` and `xcdat` runs, so `keyvi` remains experimental and is not included in the main comparison tables.
+
 The Naskitis `distinct_1` rows were produced with:
 
 ```sh
@@ -308,6 +316,8 @@ The Naskitis `distinct_1` rows were produced with:
   --phases load,find_loaded,get_loaded \
   --serialized-file /tmp/string_bimap_naskitis_distinct1_fst.bin
 ```
+
+`keyvi` was also exercised on the same `distinct_1` compact/save pattern and showed the same negative trend as Wikipedia: substantially heavier and slower than `marisa` before completion, so it is not included in the main table.
 
 Those runs assume the datasets have already been downloaded to `/tmp/StockETFList`, `/tmp/CUSIP.csv`, `/tmp/SEC_CIKs_Symbols.csv`, `/tmp/enwiki-latest-all-titles-in-ns0.keys.txt`, and `/tmp/naskitis/distinct_1`.
 
