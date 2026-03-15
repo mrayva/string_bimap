@@ -125,12 +125,27 @@ public:
 
     [[nodiscard]] SegmentMemoryUsage memory_usage() const noexcept {
         SegmentMemoryUsage usage;
+        usage.live_string_bytes = live_string_bytes();
         usage.arena_bytes = arena_.bytes_reserved();
+        usage.arena_slack_bytes = arena_.bytes_reserved() >= arena_.bytes_used()
+                                      ? (arena_.bytes_reserved() - arena_.bytes_used())
+                                      : 0;
         usage.entry_table_bytes = entries_by_id_.capacity() * sizeof(EntryLocation);
-        usage.fallback_index_bytes = detail::estimate_map_memory_bytes(fallback_index_);
+        usage.id_hole_bytes = entries_by_id_.size() >= live_size_
+                                  ? (entries_by_id_.size() - live_size_) * sizeof(EntryLocation)
+                                  : 0;
+        const auto fallback_usage = detail::estimate_map_memory(fallback_index_);
+        usage.fallback_index_bytes = fallback_usage.total_bytes;
+        usage.fallback_index_bucket_bytes = fallback_usage.bucket_bytes;
+        usage.fallback_index_key_bytes = fallback_usage.key_bytes;
+        usage.fallback_index_node_bytes = fallback_usage.node_bytes;
 #if defined(STRING_BIMAP_HAS_FSST)
         if (use_marisa_fsst_payload()) {
+            usage.live_string_bytes = fsst_live_string_bytes();
             usage.arena_bytes = fsst_payload_.capacity();
+            usage.arena_slack_bytes = fsst_payload_.capacity() >= fsst_payload_.size()
+                                          ? (fsst_payload_.capacity() - fsst_payload_.size())
+                                          : 0;
             usage.auxiliary_bytes += fsst_uncompressed_lengths_.capacity() * sizeof(std::uint32_t);
             usage.auxiliary_bytes += fsst_decoder_header_.capacity();
             usage.auxiliary_bytes += fsst_cache_memory_bytes();
@@ -705,6 +720,30 @@ public:
     }
 
 private:
+    [[nodiscard]] std::size_t live_string_bytes() const noexcept {
+        std::size_t total = 0;
+        for (const auto& entry : entries_by_id_) {
+            if (entry.live()) {
+                total += entry.length;
+            }
+        }
+        return total;
+    }
+
+    [[nodiscard]] std::size_t fsst_live_string_bytes() const noexcept {
+#if defined(STRING_BIMAP_HAS_FSST)
+        std::size_t total = 0;
+        for (StringId id = 0; id < fsst_uncompressed_lengths_.size(); ++id) {
+            if (id < entries_by_id_.size() && entries_by_id_[id].live()) {
+                total += fsst_uncompressed_lengths_[id];
+            }
+        }
+        return total;
+#else
+        return 0;
+#endif
+    }
+
     void release_fallback_index() {
         detail::StringIdMap empty;
         fallback_index_.swap(empty);

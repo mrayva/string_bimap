@@ -12,6 +12,13 @@
 
 namespace string_bimap::detail {
 
+struct EstimatedMapMemory {
+    std::size_t total_bytes = 0;
+    std::size_t bucket_bytes = 0;
+    std::size_t key_bytes = 0;
+    std::size_t node_bytes = 0;
+};
+
 struct TransparentHash {
     using is_transparent = void;
 
@@ -70,14 +77,17 @@ inline void map_reserve(StringIdMap& map, std::size_t size) {
     map.reserve(size);
 }
 
-[[nodiscard]] inline std::size_t estimate_map_memory_bytes(const StringIdMap& map) {
-    std::size_t total = sizeof(map);
-    total += map.bucket_count() * sizeof(void*);
+[[nodiscard]] inline EstimatedMapMemory estimate_map_memory(const StringIdMap& map) {
+    EstimatedMapMemory usage;
+    usage.total_bytes = sizeof(map);
+    usage.bucket_bytes = map.bucket_count() * sizeof(void*);
+    usage.total_bytes += usage.bucket_bytes;
     for (const auto& entry : map) {
-        total += sizeof(decltype(entry));
-        total += entry.first.capacity();
+        usage.node_bytes += sizeof(decltype(entry));
+        usage.key_bytes += entry.first.capacity();
     }
-    return total;
+    usage.total_bytes += usage.node_bytes + usage.key_bytes;
+    return usage;
 }
 
 #if defined(STRING_BIMAP_HAS_ARRAY_HASH)

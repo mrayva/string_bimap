@@ -58,6 +58,7 @@ If optional dependencies are not compiled in, the compact profiles degrade grace
 ## Lifetime And Safety Rules
 
 - `get_string()` returns a `std::string_view` into internal storage.
+- `try_get_string()` returns `std::nullopt` for missing or deleted IDs and avoids the empty-view ambiguity of `get_string()`.
 - `for_each_live()` and `for_each_with_prefix()` also pass `std::string_view`s into internal storage.
 - Any mutating operation, including `insert()`, `erase()`, `load()`, and `compact()`, may invalidate previously returned views.
 - Do not mutate the dictionary from inside `for_each_live()` or `for_each_with_prefix()` callbacks.
@@ -65,6 +66,7 @@ If optional dependencies are not compiled in, the compact profiles degrade grace
 - `for_each_with_prefix_unordered()` may return results in backend/native order and is intended for faster prefix scans.
 - The library is not internally synchronized. External locking is required for concurrent access if mutation is possible.
 - `get_string(id)` returns an empty view for a missing or deleted ID.
+- Prefer `try_get_string(id)` if you need to distinguish a missing/deleted ID from an empty view.
 
 ## Build
 
@@ -458,7 +460,7 @@ To reduce harness memory amplification on large corpora, you can limit the bench
 ```
 
 Supported phase names are `insert`, `find`, `get`, `prefix`, `erase`, `compact`, `prefix_compact`, `save`, `load`, `find_loaded`, `get_loaded`, and `steady_loaded`.
-The benchmark also prints internal memory accounting for each phase, including base/delta arena bytes, entry-table bytes, index bytes, tombstones, and total estimated in-structure bytes. `xcdat` compact-index bytes come from its native byte-count API; `hat-trie` compact-index bytes are estimated from its serialized representation because the library does not expose a direct in-memory byte counter.
+The benchmark also prints internal memory accounting for each phase, including live string payload bytes, arena slack, entry-table bytes, ID-hole overhead, fallback hash bucket/key/node estimates, compact-index bytes, tombstones, and total estimated in-structure bytes. `xcdat` compact-index bytes come from its native byte-count API; `hat-trie` compact-index bytes are estimated from its serialized representation because the library does not expose a direct in-memory byte counter.
 
 You can also split serialization and deserialization into separate benchmark runs with `--serialized-file`:
 
@@ -549,6 +551,7 @@ int main() {
 
     auto found = dict.find_id("banana");
     auto value = dict.get_string(apple);
+    auto maybe_value = dict.try_get_string(apple);
 
     dict.for_each_live([](string_bimap::StringId id, std::string_view value) {
         (void)id;

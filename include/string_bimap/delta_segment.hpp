@@ -218,13 +218,27 @@ public:
 
     [[nodiscard]] SegmentMemoryUsage memory_usage() const noexcept {
         SegmentMemoryUsage usage;
+        usage.live_string_bytes = live_string_bytes();
         usage.arena_bytes = arena_.bytes_reserved();
+        usage.arena_slack_bytes = arena_.bytes_reserved() >= arena_.bytes_used()
+                                      ? (arena_.bytes_reserved() - arena_.bytes_used())
+                                      : 0;
         usage.entry_table_bytes = entries_by_id_.capacity() * sizeof(EntryLocation);
-        usage.fallback_index_bytes = detail::estimate_map_memory_bytes(fallback_index_);
+        usage.id_hole_bytes = entries_by_id_.size() >= live_size_
+                                  ? (entries_by_id_.size() - live_size_) * sizeof(EntryLocation)
+                                  : 0;
+        const auto fallback_usage = detail::estimate_map_memory(fallback_index_);
+        usage.fallback_index_bytes = fallback_usage.total_bytes;
+        usage.fallback_index_bucket_bytes = fallback_usage.bucket_bytes;
+        usage.fallback_index_key_bytes = fallback_usage.key_bytes;
+        usage.fallback_index_node_bytes = fallback_usage.node_bytes;
 #if defined(STRING_BIMAP_HAS_ARRAY_HASH)
         if (use_array_map_index()) {
             usage.compact_index_bytes += detail::estimate_map_memory_bytes(array_map_index_);
             usage.fallback_index_bytes = 0;
+            usage.fallback_index_bucket_bytes = 0;
+            usage.fallback_index_key_bytes = 0;
+            usage.fallback_index_node_bytes = 0;
         }
 #endif
 #if defined(STRING_BIMAP_HAS_HAT_TRIE)
@@ -292,6 +306,16 @@ public:
     }
 
 private:
+    [[nodiscard]] std::size_t live_string_bytes() const noexcept {
+        std::size_t total = 0;
+        for (const auto& entry : entries_by_id_) {
+            if (entry.live()) {
+                total += entry.length;
+            }
+        }
+        return total;
+    }
+
     void clear_indexes() {
         fallback_index_.clear();
 #if defined(STRING_BIMAP_HAS_ARRAY_HASH)

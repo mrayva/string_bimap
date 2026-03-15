@@ -40,9 +40,15 @@ struct EntryLocation {
 };
 
 struct SegmentMemoryUsage {
+    std::size_t live_string_bytes = 0;
     std::size_t arena_bytes = 0;
+    std::size_t arena_slack_bytes = 0;
     std::size_t entry_table_bytes = 0;
+    std::size_t id_hole_bytes = 0;
     std::size_t fallback_index_bytes = 0;
+    std::size_t fallback_index_bucket_bytes = 0;
+    std::size_t fallback_index_key_bytes = 0;
+    std::size_t fallback_index_node_bytes = 0;
     std::size_t compact_index_bytes = 0;
     std::size_t auxiliary_bytes = 0;
 

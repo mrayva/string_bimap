@@ -411,14 +411,26 @@ void release_vector(std::vector<T>& values) {
 }
 
 void print_usage(std::string_view prefix, const string_bimap::StringBimapMemoryUsage& usage) {
+    print_memory(std::string(prefix) + "_base_live_strings", usage.base.live_string_bytes);
     print_memory(std::string(prefix) + "_base_arena", usage.base.arena_bytes);
+    print_memory(std::string(prefix) + "_base_arena_slack", usage.base.arena_slack_bytes);
     print_memory(std::string(prefix) + "_base_entries", usage.base.entry_table_bytes);
+    print_memory(std::string(prefix) + "_base_id_holes", usage.base.id_hole_bytes);
     print_memory(std::string(prefix) + "_base_fallback_index", usage.base.fallback_index_bytes);
+    print_memory(std::string(prefix) + "_base_fallback_buckets", usage.base.fallback_index_bucket_bytes);
+    print_memory(std::string(prefix) + "_base_fallback_keys", usage.base.fallback_index_key_bytes);
+    print_memory(std::string(prefix) + "_base_fallback_nodes", usage.base.fallback_index_node_bytes);
     print_memory(std::string(prefix) + "_base_compact_index", usage.base.compact_index_bytes);
     print_memory(std::string(prefix) + "_base_aux", usage.base.auxiliary_bytes);
+    print_memory(std::string(prefix) + "_delta_live_strings", usage.delta.live_string_bytes);
     print_memory(std::string(prefix) + "_delta_arena", usage.delta.arena_bytes);
+    print_memory(std::string(prefix) + "_delta_arena_slack", usage.delta.arena_slack_bytes);
     print_memory(std::string(prefix) + "_delta_entries", usage.delta.entry_table_bytes);
+    print_memory(std::string(prefix) + "_delta_id_holes", usage.delta.id_hole_bytes);
     print_memory(std::string(prefix) + "_delta_fallback_index", usage.delta.fallback_index_bytes);
+    print_memory(std::string(prefix) + "_delta_fallback_buckets", usage.delta.fallback_index_bucket_bytes);
+    print_memory(std::string(prefix) + "_delta_fallback_keys", usage.delta.fallback_index_key_bytes);
+    print_memory(std::string(prefix) + "_delta_fallback_nodes", usage.delta.fallback_index_node_bytes);
     print_memory(std::string(prefix) + "_delta_compact_index", usage.delta.compact_index_bytes);
     print_memory(std::string(prefix) + "_delta_aux", usage.delta.auxiliary_bytes);
     print_memory(std::string(prefix) + "_tombstones", usage.tombstone_bytes);
