@@ -54,10 +54,17 @@ void expect(bool condition, const char* message) {
             return path + ".compact.xcdat";
         case BackendProfile::CompactMemoryMarisa:
             return path + ".compact.marisa";
+        case BackendProfile::CompactMemoryFst:
+            return path + ".compact.fst";
         case BackendProfile::FastLookup:
             return {};
     }
     return {};
+}
+
+[[nodiscard]] bool compact_backend_uses_ids_sidecar(BackendProfile profile) {
+    return profile == BackendProfile::CompactMemory ||
+           profile == BackendProfile::CompactMemoryMarisa;
 }
 
 template <class Fn>
@@ -65,6 +72,7 @@ void for_each_profile(Fn&& fn) {
     fn(BackendProfile::FastLookup);
     fn(BackendProfile::CompactMemory);
     fn(BackendProfile::CompactMemoryMarisa);
+    fn(BackendProfile::CompactMemoryFst);
 }
 
 void test_basic_insert_erase_compact(BackendProfile profile) {
@@ -325,7 +333,11 @@ void test_compact_native_sidecars() {
         dict.save(path);
 
         expect(std::filesystem::exists(trie_path), "compact trie sidecar should be written");
-        expect(std::filesystem::exists(ids_path), "compact id sidecar should be written");
+        if (compact_backend_uses_ids_sidecar(profile)) {
+            expect(std::filesystem::exists(ids_path), "compact id sidecar should be written");
+        } else {
+            expect(!std::filesystem::exists(ids_path), "compact fst backend should not emit id sidecar");
+        }
 
         auto restored = StringBimap::load(path);
         expect(restored.find_id("alpha").value() == alpha, "native compact load should preserve alpha");
@@ -342,6 +354,7 @@ void test_compact_native_sidecars() {
 #if defined(STRING_BIMAP_HAS_MARISA)
     run(BackendProfile::CompactMemoryMarisa);
 #endif
+    run(BackendProfile::CompactMemoryFst);
 #endif
 }
 
@@ -365,7 +378,11 @@ void test_save_compacted_preserves_ids_and_sidecars() {
         dict.save_compacted(path);
 
         expect(std::filesystem::exists(trie_path), "save_compacted should emit compact trie sidecar");
-        expect(std::filesystem::exists(ids_path), "save_compacted should emit compact id sidecar");
+        if (compact_backend_uses_ids_sidecar(profile)) {
+            expect(std::filesystem::exists(ids_path), "save_compacted should emit compact id sidecar");
+        } else {
+            expect(!std::filesystem::exists(ids_path), "save_compacted fst backend should not emit id sidecar");
+        }
 
         auto restored = StringBimap::load(path);
         expect(restored.find_id("alpha").value() == alpha, "save_compacted should preserve alpha id");
@@ -384,6 +401,7 @@ void test_save_compacted_preserves_ids_and_sidecars() {
 #if defined(STRING_BIMAP_HAS_MARISA)
     run(BackendProfile::CompactMemoryMarisa);
 #endif
+    run(BackendProfile::CompactMemoryFst);
 #endif
 }
 
@@ -499,6 +517,9 @@ void test_backend_profile_explicit_selection() {
 
     StringBimap marisa(0, BackendProfile::CompactMemoryMarisa);
     expect(marisa.backend_profile() == BackendProfile::CompactMemoryMarisa, "marisa profile should be selectable");
+
+    StringBimap fst(0, BackendProfile::CompactMemoryFst);
+    expect(fst.backend_profile() == BackendProfile::CompactMemoryFst, "fst profile should be selectable");
 }
 
 }  // namespace

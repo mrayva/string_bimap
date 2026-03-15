@@ -213,16 +213,15 @@ public:
         }
         save(out);
 
-#if defined(STRING_BIMAP_HAS_XCDAT) || defined(STRING_BIMAP_HAS_MARISA)
         if (base_.has_native_compact_index() && delta_.size() == 0 && tombstones_.empty()) {
             base_.save_native_compact_index(path);
         } else {
             std::error_code ec;
             std::filesystem::remove(detail::compact_trie_sidecar_path(path), ec);
             std::filesystem::remove(detail::compact_marisa_sidecar_path(path), ec);
+            std::filesystem::remove(detail::compact_fst_sidecar_path(path), ec);
             std::filesystem::remove(detail::compact_ids_sidecar_path(path), ec);
         }
-#endif
     }
 
     // Saves a compacted snapshot to path without mutating the original dictionary.
@@ -319,7 +318,6 @@ public:
             items.push_back(BaseSegment::BuildItem{id, value});
         }
 
-#if defined(STRING_BIMAP_HAS_XCDAT) || defined(STRING_BIMAP_HAS_MARISA)
         bool loaded_native_compact = false;
         const bool has_xcdat_sidecars =
             std::filesystem::exists(detail::compact_trie_sidecar_path(path)) &&
@@ -327,21 +325,22 @@ public:
         const bool has_marisa_sidecars =
             std::filesystem::exists(detail::compact_marisa_sidecar_path(path)) &&
             std::filesystem::exists(detail::compact_ids_sidecar_path(path));
+        const bool has_fst_sidecar =
+            std::filesystem::exists(detail::compact_fst_sidecar_path(path));
         if ((profile == BackendProfile::CompactMemory && has_xcdat_sidecars) ||
-            (profile == BackendProfile::CompactMemoryMarisa && has_marisa_sidecars)) {
+            (profile == BackendProfile::CompactMemoryMarisa && has_marisa_sidecars) ||
+            (profile == BackendProfile::CompactMemoryFst && has_fst_sidecar)) {
             loaded_native_compact = dict.base_.load_native_compact_index(std::move(items), path);
         }
         if (!loaded_native_compact) {
             dict.base_.rebuild(std::move(items));
             if ((profile == BackendProfile::CompactMemory ||
-                 profile == BackendProfile::CompactMemoryMarisa) &&
+                 profile == BackendProfile::CompactMemoryMarisa ||
+                 profile == BackendProfile::CompactMemoryFst) &&
                 dict.base_.has_native_compact_index()) {
                 dict.base_.save_native_compact_index(path);
             }
         }
-#else
-        dict.base_.rebuild(std::move(items));
-#endif
         dict.delta_.clear();
         dict.tombstones_.clear();
         dict.live_size_ = static_cast<std::size_t>(live_count);

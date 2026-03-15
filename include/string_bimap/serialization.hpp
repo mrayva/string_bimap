@@ -62,6 +62,10 @@ inline std::string compact_marisa_sidecar_path(const std::string& path) {
     return path + ".compact.marisa";
 }
 
+inline std::string compact_fst_sidecar_path(const std::string& path) {
+    return path + ".compact.fst";
+}
+
 inline std::string compact_ids_sidecar_path(const std::string& path) {
     return path + ".compact.ids";
 }

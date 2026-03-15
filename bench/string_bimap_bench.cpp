@@ -67,6 +67,8 @@ struct Config {
             return "compact";
         case BackendProfile::CompactMemoryMarisa:
             return "marisa";
+        case BackendProfile::CompactMemoryFst:
+            return "fst";
     }
     return "unknown";
 }
@@ -131,6 +133,8 @@ struct Config {
                 cfg.profile = BackendProfile::CompactMemory;
             } else if (value == "marisa") {
                 cfg.profile = BackendProfile::CompactMemoryMarisa;
+            } else if (value == "fst") {
+                cfg.profile = BackendProfile::CompactMemoryFst;
             } else {
                 throw std::invalid_argument("invalid profile: " + std::string(value));
             }
@@ -519,13 +523,13 @@ int main(int argc, char** argv) {
                   << " unique_keys=" << keys.size() << '\n';
     }
 #if defined(STRING_BIMAP_HAS_XCDAT) && defined(STRING_BIMAP_HAS_MARISA)
-    std::cout << "compiled_static_index=xcdat,marisa\n";
+    std::cout << "compiled_static_index=xcdat,marisa,fst\n";
 #elif defined(STRING_BIMAP_HAS_XCDAT)
-    std::cout << "compiled_static_index=xcdat\n";
+    std::cout << "compiled_static_index=xcdat,fst\n";
 #elif defined(STRING_BIMAP_HAS_MARISA)
-    std::cout << "compiled_static_index=marisa\n";
+    std::cout << "compiled_static_index=marisa,fst\n";
 #else
-    std::cout << "compiled_static_index=fallback_map\n";
+    std::cout << "compiled_static_index=fallback_map,fst\n";
 #endif
 #if defined(STRING_BIMAP_HAS_HAT_TRIE)
     std::cout << "compiled_delta_index=hat-trie\n";

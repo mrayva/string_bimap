@@ -15,6 +15,7 @@ enum class BackendProfile : std::uint8_t {
     FastLookup = 0,
     CompactMemory = 1,
     CompactMemoryMarisa = 2,
+    CompactMemoryFst = 3,
 };
 
 struct LookupResult {

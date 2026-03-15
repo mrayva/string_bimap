@@ -114,6 +114,7 @@ On the benchmarked real datasets so far:
 - `FastLookup` is still the default recommendation for point-query-heavy workloads.
 - `CompactMemoryMarisa` currently looks like the stronger experimental compact backend overall.
 - `CompactMemory` (`xcdat`) is still competitive on shorter identifier-like corpora where it can be slightly smaller.
+- `CompactMemoryFst` is now available as an experimental FST backend, but current results do not make it a preferred choice.
 
 The table below summarizes the stock-style real-dataset results from the dependency-backed build. Times are nanoseconds per operation; memory is the internal post-load estimate reported by `memory_usage()`.
 
@@ -122,24 +123,32 @@ The table below summarizes the stock-style real-dataset results from the depende
 | `StockETFList` | `Symbol` | `fast` | 733.7 | 207.8 | 227.0 | 1061.6 | 984.8 | 2.55 MB |
 | `StockETFList` | `Symbol` | `compact` | 1686.08 | 372.21 | 399.25 | 3620.47 | 3491.85 | 0.76 MB |
 | `StockETFList` | `Symbol` | `marisa` | 1656.90 | 366.58 | 391.55 | 1443.93 | 1329.13 | 0.83 MB |
+| `StockETFList` | `Symbol` | `fst` | 1746.49 | 390.56 | 423.77 | 4111.11 | 3607.70 | 0.73 MB |
 | `StockETFList` | `Company Name` | `fast` | 843.3 | 315.9 | 316.0 | 1345.2 | 1162.3 | 4.20 MB |
 | `StockETFList` | `Company Name` | `compact` | 1748.42 | 440.15 | 457.36 | 11702.67 | 10347.20 | 2.79 MB |
 | `StockETFList` | `Company Name` | `marisa` | 1921.39 | 542.60 | 590.74 | 3230.05 | 2602.86 | 2.44 MB |
+| `StockETFList` | `Company Name` | `fst` | 2174.68 | 449.83 | 496.79 | 1412.74 | 1827.70 | 4.20 MB |
 | `CUSIP.csv` | `cusip` | `fast` | 721.46 | 233.72 | 266.03 | 1158.54 | 1092.01 | 4.32 MB |
 | `CUSIP.csv` | `cusip` | `compact` | 1733.84 | 394.13 | 416.34 | 6478.76 | 5872.09 | 1.54 MB |
 | `CUSIP.csv` | `cusip` | `marisa` | 1521.21 | 393.58 | 416.67 | 1650.35 | 1895.64 | 1.63 MB |
+| `CUSIP.csv` | `cusip` | `fst` | 1607.32 | 400.41 | 433.99 | 5618.53 | 5372.11 | 1.34 MB |
 | `CUSIP.csv` | `symbol` | `fast` | 768.97 | 265.62 | 264.38 | 1163.94 | 1588.19 | 4.10 MB |
 | `CUSIP.csv` | `symbol` | `compact` | 1580.97 | 397.22 | 429.00 | 4716.56 | 4619.25 | 1.26 MB |
 | `CUSIP.csv` | `symbol` | `marisa` | 1589.89 | 380.06 | 436.36 | 1480.84 | 1428.64 | 1.36 MB |
+| `CUSIP.csv` | `symbol` | `fst` | 1572.81 | 375.02 | 397.25 | 3861.01 | 3629.19 | 1.21 MB |
 | `CUSIP.csv` | `description` | `fast` | 945.83 | 449.80 | 514.25 | 1425.14 | 1719.44 | 5.79 MB |
 | `CUSIP.csv` | `description` | `compact` | 1764.58 | 470.88 | 529.30 | 7541.33 | 7269.51 | 3.19 MB |
 | `CUSIP.csv` | `description` | `marisa` | 1804.52 | 502.10 | 572.40 | 2557.44 | 2403.66 | 2.81 MB |
+| `CUSIP.csv` | `description` | `fst` | 2026.04 | 457.99 | 514.62 | 1308.83 | 1235.61 | 5.79 MB |
 | `SEC_CIKs_Symbols.csv` | `cik` | `compact` | 1318.99 | 277.08 | 309.29 | 4715.56 | 4620.10 | 191 KB |
 | `SEC_CIKs_Symbols.csv` | `cik` | `marisa` | 1370.18 | 281.97 | 310.85 | 1449.85 | 1375.40 | 207 KB |
+| `SEC_CIKs_Symbols.csv` | `cik` | `fst` | 1333.96 | 274.67 | 313.03 | 5426.63 | 5242.71 | 180 KB |
 | `SEC_CIKs_Symbols.csv` | `symbol` | `compact` | 1372.31 | 294.07 | 329.76 | 3129.22 | 3064.90 | 189 KB |
 | `SEC_CIKs_Symbols.csv` | `symbol` | `marisa` | 1369.09 | 296.37 | 330.67 | 1349.17 | 1269.30 | 209 KB |
+| `SEC_CIKs_Symbols.csv` | `symbol` | `fst` | 1373.88 | 294.28 | 323.92 | 3530.42 | 3400.80 | 175 KB |
 | `SEC_CIKs_Symbols.csv` | `Name` | `compact` | 1481.12 | 303.77 | 332.48 | 7272.04 | 7031.88 | 375 KB |
 | `SEC_CIKs_Symbols.csv` | `Name` | `marisa` | 1444.89 | 298.93 | 328.26 | 2136.58 | 1953.43 | 339 KB |
+| `SEC_CIKs_Symbols.csv` | `Name` | `fst` | 1459.07 | 307.27 | 355.33 | 27648.42 | 26505.80 | 353 KB |
 
 At this point the tradeoff is consistent:
 
@@ -147,9 +156,11 @@ At this point the tradeoff is consistent:
 - Among the compact backends, `CompactMemoryMarisa` is usually much faster on compaction and load.
 - `CompactMemory` can still be slightly smaller on shorter identifier-like columns.
 - `CompactMemoryMarisa` is often smaller on longer text columns.
+- `CompactMemoryFst` is occasionally compact on short-key corpora, but it is not competitive overall on large compact/save/load runs.
 - If point queries are the dominant operation, start with `FastLookup`.
 - If you want a compact backend, start by evaluating `CompactMemoryMarisa` on your real corpus.
 - Keep `CompactMemory` in the mix if minimum footprint on short code/ticker keys matters most.
+- Treat `CompactMemoryFst` as experimental only.
 
 Wikipedia titles tell the same story at larger scale. Using `/tmp/enwiki-latest-all-titles-in-ns0.keys.txt` with compact snapshots:
 
@@ -157,6 +168,7 @@ Wikipedia titles tell the same story at larger scale. Using `/tmp/enwiki-latest-
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | `enwiki-latest-all-titles-in-ns0` | `compact` | 63.4 s | 28.0 s | 33.4 s | 210.2 s | 187.1 s | 8.95 s | 3975.81 ns/op | 32.28 ns/op | 708 MB |
 | `enwiki-latest-all-titles-in-ns0` | `marisa` | 63.2 s | 29.2 s | 34.9 s | 86.3 s | 72.3 s | 8.91 s | 2144.53 ns/op | 32.25 ns/op | 688 MB |
+| `enwiki-latest-all-titles-in-ns0` | `fst` | 61.3 s | 28.6 s | 33.1 s | 327.2 s | 310.8 s | 16.83 s | 2555.44 ns/op | 34.95 ns/op | 715 MB |
 
 The Naskitis `distinct_1` text corpus shows a similar tradeoff on a large compacted dictionary:
 
@@ -164,6 +176,7 @@ The Naskitis `distinct_1` text corpus shows a similar tradeoff on a large compac
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | `distinct_1` | `compact` | 73.1 s | 41.1 s | 48.9 s | 232.0 s | 218.1 s | 15.09 s | 2828.26 ns/op | 33.36 ns/op | 830 MB |
 | `distinct_1` | `marisa` | 72.9 s | 40.5 s | 49.3 s | 102.0 s | 93.0 s | 14.99 s | 954.74 ns/op | 33.95 ns/op | 856 MB |
+| `distinct_1` | `fst` | 73.7 s | 42.2 s | 52.1 s | 237.1 s | 234.8 s | 24.59 s | 1743.71 ns/op | 34.38 ns/op | 802 MB |
 
 The table above was produced with the dependency-backed benchmark binary:
 
@@ -171,26 +184,34 @@ The table above was produced with the dependency-backed benchmark binary:
 ./build-vcpkg/string_bimap_bench --csv /tmp/StockETFList --column Symbol --profile fast
 ./build-vcpkg/string_bimap_bench --csv /tmp/StockETFList --column Symbol --profile compact
 ./build-vcpkg/string_bimap_bench --csv /tmp/StockETFList --column Symbol --profile marisa
+./build-vcpkg/string_bimap_bench --csv /tmp/StockETFList --column Symbol --profile fst
 ./build-vcpkg/string_bimap_bench --csv /tmp/StockETFList --column "Company Name" --profile fast
 ./build-vcpkg/string_bimap_bench --csv /tmp/StockETFList --column "Company Name" --profile compact
 ./build-vcpkg/string_bimap_bench --csv /tmp/StockETFList --column "Company Name" --profile marisa
+./build-vcpkg/string_bimap_bench --csv /tmp/StockETFList --column "Company Name" --profile fst
 
 ./build-vcpkg/string_bimap_bench --csv /tmp/CUSIP.csv --column cusip --profile fast
 ./build-vcpkg/string_bimap_bench --csv /tmp/CUSIP.csv --column cusip --profile compact
 ./build-vcpkg/string_bimap_bench --csv /tmp/CUSIP.csv --column cusip --profile marisa
+./build-vcpkg/string_bimap_bench --csv /tmp/CUSIP.csv --column cusip --profile fst
 ./build-vcpkg/string_bimap_bench --csv /tmp/CUSIP.csv --column symbol --profile fast
 ./build-vcpkg/string_bimap_bench --csv /tmp/CUSIP.csv --column symbol --profile compact
 ./build-vcpkg/string_bimap_bench --csv /tmp/CUSIP.csv --column symbol --profile marisa
+./build-vcpkg/string_bimap_bench --csv /tmp/CUSIP.csv --column symbol --profile fst
 ./build-vcpkg/string_bimap_bench --csv /tmp/CUSIP.csv --column description --profile fast
 ./build-vcpkg/string_bimap_bench --csv /tmp/CUSIP.csv --column description --profile compact
 ./build-vcpkg/string_bimap_bench --csv /tmp/CUSIP.csv --column description --profile marisa
+./build-vcpkg/string_bimap_bench --csv /tmp/CUSIP.csv --column description --profile fst
 
 ./build-vcpkg/string_bimap_bench --csv /tmp/SEC_CIKs_Symbols.csv --column cik --profile compact
 ./build-vcpkg/string_bimap_bench --csv /tmp/SEC_CIKs_Symbols.csv --column cik --profile marisa
+./build-vcpkg/string_bimap_bench --csv /tmp/SEC_CIKs_Symbols.csv --column cik --profile fst
 ./build-vcpkg/string_bimap_bench --csv /tmp/SEC_CIKs_Symbols.csv --column symbol --profile compact
 ./build-vcpkg/string_bimap_bench --csv /tmp/SEC_CIKs_Symbols.csv --column symbol --profile marisa
+./build-vcpkg/string_bimap_bench --csv /tmp/SEC_CIKs_Symbols.csv --column symbol --profile fst
 ./build-vcpkg/string_bimap_bench --csv /tmp/SEC_CIKs_Symbols.csv --column Name --profile compact
 ./build-vcpkg/string_bimap_bench --csv /tmp/SEC_CIKs_Symbols.csv --column Name --profile marisa
+./build-vcpkg/string_bimap_bench --csv /tmp/SEC_CIKs_Symbols.csv --column Name --profile fst
 ```
 
 The Wikipedia rows were produced with:
@@ -219,6 +240,17 @@ The Wikipedia rows were produced with:
   --seed 7
 
 ./build-vcpkg/string_bimap_bench \
+  --line-file /tmp/enwiki-latest-all-titles-in-ns0.keys.txt \
+  --profile fst \
+  --prefix A \
+  --phases insert,find,get,erase,compact,save \
+  --release-inputs-before-compact \
+  --serialized-file /tmp/string_bimap_enwiki_fst.bin \
+  --save-compacted \
+  --shuffle \
+  --seed 7
+
+./build-vcpkg/string_bimap_bench \
   --profile compact \
   --phases load,find_loaded,get_loaded \
   --serialized-file /tmp/string_bimap_enwiki_xcdat.bin
@@ -227,6 +259,11 @@ The Wikipedia rows were produced with:
   --profile marisa \
   --phases load,find_loaded,get_loaded \
   --serialized-file /tmp/string_bimap_enwiki_marisa.bin
+
+./build-vcpkg/string_bimap_bench \
+  --profile fst \
+  --phases load,find_loaded,get_loaded \
+  --serialized-file /tmp/string_bimap_enwiki_fst.bin
 ```
 
 The Naskitis `distinct_1` rows were produced with:
@@ -249,6 +286,14 @@ The Naskitis `distinct_1` rows were produced with:
   --save-compacted
 
 ./build-vcpkg/string_bimap_bench \
+  --line-file /tmp/naskitis/distinct_1 \
+  --profile fst \
+  --phases insert,find,get,compact,save \
+  --release-inputs-before-compact \
+  --serialized-file /tmp/string_bimap_naskitis_distinct1_fst.bin \
+  --save-compacted
+
+./build-vcpkg/string_bimap_bench \
   --profile compact \
   --phases load,find_loaded,get_loaded \
   --serialized-file /tmp/string_bimap_naskitis_distinct1_xcdat.bin
@@ -257,6 +302,11 @@ The Naskitis `distinct_1` rows were produced with:
   --profile marisa \
   --phases load,find_loaded,get_loaded \
   --serialized-file /tmp/string_bimap_naskitis_distinct1_marisa.bin
+
+./build-vcpkg/string_bimap_bench \
+  --profile fst \
+  --phases load,find_loaded,get_loaded \
+  --serialized-file /tmp/string_bimap_naskitis_distinct1_fst.bin
 ```
 
 Those runs assume the datasets have already been downloaded to `/tmp/StockETFList`, `/tmp/CUSIP.csv`, `/tmp/SEC_CIKs_Symbols.csv`, `/tmp/enwiki-latest-all-titles-in-ns0.keys.txt`, and `/tmp/naskitis/distinct_1`.

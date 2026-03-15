@@ -3,7 +3,9 @@
 #include <algorithm>
 #include <cstddef>
 #include <fstream>
+#include <memory>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -12,6 +14,7 @@
 #include "detail/string_map.hpp"
 #include "packed_string_arena.hpp"
 #include "serialization.hpp"
+#include "third_party/cpp_fstlib/fstlib.h"
 #include "types.hpp"
 
 #if defined(STRING_BIMAP_HAS_XCDAT)
@@ -57,6 +60,13 @@ public:
             return local_to_global_[agent.key().id()];
         }
 #endif
+        if (use_fst_index()) {
+            StringId id = kInvalidId;
+            if (!fst_map_->exact_match_search(value, id)) {
+                return std::nullopt;
+            }
+            return id;
+        }
         const auto it = detail::map_find(fallback_index_, value);
         if (it == fallback_index_.end()) {
             return std::nullopt;
@@ -85,8 +95,8 @@ public:
         usage.entry_table_bytes = entries_by_id_.capacity() * sizeof(EntryLocation);
         usage.fallback_index_bytes = detail::estimate_map_memory_bytes(fallback_index_);
 #if defined(STRING_BIMAP_HAS_XCDAT)
-        usage.compact_index_bytes += local_to_global_.capacity() * sizeof(StringId);
-        if (trie_.has_value()) {
+        if (use_xcdat_index()) {
+            usage.compact_index_bytes += local_to_global_.capacity() * sizeof(StringId);
             usage.compact_index_bytes += static_cast<std::size_t>(xcdat::memory_in_bytes(*trie_));
         }
 #endif
@@ -96,6 +106,9 @@ public:
             usage.compact_index_bytes += marisa_trie_.total_size();
         }
 #endif
+        if (use_fst_index()) {
+            usage.compact_index_bytes += fst_bytecode_.capacity();
+        }
         return usage;
     }
 
@@ -110,11 +123,10 @@ public:
             return true;
         }
 #endif
-#if !defined(STRING_BIMAP_HAS_XCDAT) && !defined(STRING_BIMAP_HAS_MARISA)
+        if (profile_ == BackendProfile::CompactMemoryFst && fst_map_) {
+            return true;
+        }
         return false;
-#else
-        return false;
-#endif
     }
 
     void save_native_compact_index(const std::string& path) const {
@@ -132,6 +144,14 @@ public:
             return;
         }
 #endif
+        if (use_fst_index()) {
+            std::ofstream out(detail::compact_fst_sidecar_path(path), std::ios::binary);
+            if (!out) {
+                throw std::runtime_error("failed to open fst sidecar for writing");
+            }
+            detail::write_bytes(out, fst_bytecode_.data(), fst_bytecode_.size());
+            return;
+        }
 #if defined(STRING_BIMAP_HAS_XCDAT) || defined(STRING_BIMAP_HAS_MARISA)
         throw std::runtime_error("compact trie index is not available");
 #else
@@ -180,6 +200,26 @@ public:
             }
         }
 #endif
+        if (profile_ == BackendProfile::CompactMemoryFst) {
+            try {
+                rebuild_storage(items);
+                fallback_index_.clear();
+                std::ifstream in(detail::compact_fst_sidecar_path(path), std::ios::binary);
+                if (!in) {
+                    throw std::runtime_error("failed to open fst sidecar");
+                }
+                fst_bytecode_.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+                fst_map_ = std::make_unique<FstMapType>(fst_bytecode_);
+                if (!*fst_map_) {
+                    throw std::runtime_error("failed to load fst sidecar");
+                }
+                return true;
+            } catch (...) {
+                fst_map_.reset();
+                fst_bytecode_.clear();
+                return false;
+            }
+        }
         (void)path;
         return false;
     }
@@ -220,6 +260,17 @@ public:
             return;
         }
 #endif
+        if (use_fst_index()) {
+            std::vector<StringId> ids;
+            fst_map_->predictive_search(prefix, [&](const std::string&, const StringId& id) {
+                ids.push_back(id);
+            });
+            std::sort(ids.begin(), ids.end());
+            for (const auto id : ids) {
+                func(id, get_string(id));
+            }
+            return;
+        }
         for (StringId id = 0; id < entries_by_id_.size(); ++id) {
             if (!entries_by_id_[id].live()) {
                 continue;
@@ -257,6 +308,12 @@ public:
             return;
         }
 #endif
+        if (use_fst_index()) {
+            fst_map_->predictive_search(prefix, [&](const std::string&, const StringId& id) {
+                func(id, get_string(id));
+            });
+            return;
+        }
         for_each_with_prefix(prefix, std::forward<Func>(func));
     }
 
@@ -311,6 +368,10 @@ private:
 #endif
     }
 
+    [[nodiscard]] bool use_fst_index() const noexcept {
+        return profile_ == BackendProfile::CompactMemoryFst && static_cast<bool>(fst_map_);
+    }
+
     void build_lookup(const std::vector<BuildItem>& items) {
         release_fallback_index();
         detail::map_reserve(fallback_index_, items.size());
@@ -318,8 +379,6 @@ private:
             detail::map_insert_or_assign(fallback_index_, item.value, item.id);
         }
 
-#if defined(STRING_BIMAP_HAS_XCDAT)
-        trie_.reset();
         std::vector<std::pair<std::string, StringId>> sorted_keys;
         sorted_keys.reserve(items.size());
         for (const auto& item : items) {
@@ -335,10 +394,14 @@ private:
 
         std::vector<std::string> keys;
         keys.reserve(sorted_keys.size());
+        bool has_empty_key = false;
         for (const auto& item : sorted_keys) {
             keys.push_back(item.first);
+            has_empty_key = has_empty_key || item.first.empty();
         }
 
+#if defined(STRING_BIMAP_HAS_XCDAT)
+        trie_.reset();
         if (profile_ == BackendProfile::CompactMemory) {
             trie_ = TrieType(keys);
             local_to_global_.assign(keys.size(), kInvalidId);
@@ -377,6 +440,26 @@ private:
             release_fallback_index();
         }
 #endif
+        fst_map_.reset();
+        fst_bytecode_.clear();
+        if (profile_ == BackendProfile::CompactMemoryFst && !has_empty_key) {
+            std::vector<std::pair<std::string, StringId>> fst_items;
+            fst_items.reserve(sorted_keys.size());
+            for (const auto& item : sorted_keys) {
+                fst_items.emplace_back(item.first, item.second);
+            }
+            std::ostringstream out(std::ios::binary);
+            const auto [result, error_index] = fst::compile<StringId>(fst_items, out, true);
+            if (result != fst::Result::Success) {
+                throw std::runtime_error("fst compile failed at input index " + std::to_string(error_index));
+            }
+            fst_bytecode_ = out.str();
+            fst_map_ = std::make_unique<FstMapType>(fst_bytecode_);
+            if (!*fst_map_) {
+                throw std::runtime_error("fst map construction failed");
+            }
+            release_fallback_index();
+        }
     }
 
     PackedStringArena arena_;
@@ -393,6 +476,9 @@ private:
     marisa::Trie marisa_trie_;
     bool marisa_ready_ = false;
 #endif
+    using FstMapType = fst::map<StringId>;
+    std::string fst_bytecode_;
+    std::unique_ptr<FstMapType> fst_map_;
     std::vector<StringId> local_to_global_;
 };
 
