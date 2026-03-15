@@ -456,7 +456,7 @@ To reduce harness memory amplification on large corpora, you can limit the bench
   --seed 7
 ```
 
-Supported phase names are `insert`, `find`, `get`, `prefix`, `erase`, `compact`, `prefix_compact`, `save`, `load`, `find_loaded`, and `get_loaded`.
+Supported phase names are `insert`, `find`, `get`, `prefix`, `erase`, `compact`, `prefix_compact`, `save`, `load`, `find_loaded`, `get_loaded`, and `steady_loaded`.
 The benchmark also prints internal memory accounting for each phase, including base/delta arena bytes, entry-table bytes, index bytes, tombstones, and total estimated in-structure bytes. `xcdat` compact-index bytes come from its native byte-count API; `hat-trie` compact-index bytes are estimated from its serialized representation because the library does not expose a direct in-memory byte counter.
 
 You can also split serialization and deserialization into separate benchmark runs with `--serialized-file`:
@@ -514,16 +514,23 @@ For post-load steady-state read benchmarking, you can add:
 
 - `find_loaded`
 - `get_loaded`
+- `steady_loaded`
 
 and control repetitions with `--read-repeats N`.
+`steady_loaded` runs a configurable mixed read loop over the loaded dictionary using:
+
+- `--loaded-find-ratio N`
+- `--loaded-get-ratio N`
 
 Example:
 
 ```sh
 ./build-vcpkg/string_bimap_bench \
   --profile compact \
-  --phases load,find_loaded,get_loaded \
+  --phases load,steady_loaded \
   --read-repeats 5 \
+  --loaded-find-ratio 4 \
+  --loaded-get-ratio 1 \
   --serialized-file /tmp/string_bimap_enwiki_compact.bin
 ```
 

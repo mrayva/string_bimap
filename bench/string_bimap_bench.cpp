@@ -48,6 +48,8 @@ struct Config {
     bool release_serialized_before_load = false;
     std::size_t read_repeats = 1;
     std::size_t read_limit = 0;
+    std::size_t loaded_find_ratio = 1;
+    std::size_t loaded_get_ratio = 1;
     BackendProfile profile = BackendProfile::FastLookup;
 };
 
@@ -123,6 +125,10 @@ struct Config {
             cfg.read_repeats = static_cast<std::size_t>(std::stoull(argv[++i]));
         } else if (arg == "--read-limit" && i + 1 < argc) {
             cfg.read_limit = static_cast<std::size_t>(std::stoull(argv[++i]));
+        } else if (arg == "--loaded-find-ratio" && i + 1 < argc) {
+            cfg.loaded_find_ratio = static_cast<std::size_t>(std::stoull(argv[++i]));
+        } else if (arg == "--loaded-get-ratio" && i + 1 < argc) {
+            cfg.loaded_get_ratio = static_cast<std::size_t>(std::stoull(argv[++i]));
         } else if (arg == "--column" && i + 1 < argc) {
             cfg.column = argv[++i];
         } else if (arg == "--keys" && i + 1 < argc) {
@@ -460,6 +466,8 @@ int main(int argc, char** argv) {
                   << " profile=" << profile_name(cfg.profile)
                   << " serialized_file=" << (cfg.serialized_file_path.empty() ? "<memory>" : cfg.serialized_file_path)
                   << " read_repeats=" << cfg.read_repeats
+                  << " loaded_find_ratio=" << cfg.loaded_find_ratio
+                  << " loaded_get_ratio=" << cfg.loaded_get_ratio
                   << " phases=";
         bool first_phase = true;
         for (const auto& phase : cfg.phases) {
@@ -478,6 +486,8 @@ int main(int argc, char** argv) {
                   << " serialized_file=" << (cfg.serialized_file_path.empty() ? "<memory>" : cfg.serialized_file_path)
                   << " save_compacted=" << (cfg.save_compacted ? "true" : "false")
                   << " read_repeats=" << cfg.read_repeats
+                  << " loaded_find_ratio=" << cfg.loaded_find_ratio
+                  << " loaded_get_ratio=" << cfg.loaded_get_ratio
                   << " phases=";
         bool first_phase = true;
         for (const auto& phase : cfg.phases) {
@@ -493,6 +503,8 @@ int main(int argc, char** argv) {
                   << " serialized_file=" << (cfg.serialized_file_path.empty() ? "<memory>" : cfg.serialized_file_path)
                   << " save_compacted=" << (cfg.save_compacted ? "true" : "false")
                   << " read_repeats=" << cfg.read_repeats
+                  << " loaded_find_ratio=" << cfg.loaded_find_ratio
+                  << " loaded_get_ratio=" << cfg.loaded_get_ratio
                   << " phases=";
         bool first_phase = true;
         for (const auto& phase : cfg.phases) {
@@ -511,6 +523,8 @@ int main(int argc, char** argv) {
                   << " serialized_file=" << (cfg.serialized_file_path.empty() ? "<memory>" : cfg.serialized_file_path)
                   << " save_compacted=" << (cfg.save_compacted ? "true" : "false")
                   << " read_repeats=" << cfg.read_repeats
+                  << " loaded_find_ratio=" << cfg.loaded_find_ratio
+                  << " loaded_get_ratio=" << cfg.loaded_get_ratio
                   << " phases=";
         bool first_phase = true;
         for (const auto& phase : cfg.phases) {
@@ -528,6 +542,8 @@ int main(int argc, char** argv) {
                   << " serialized_file=" << (cfg.serialized_file_path.empty() ? "<memory>" : cfg.serialized_file_path)
                   << " save_compacted=" << (cfg.save_compacted ? "true" : "false")
                   << " read_repeats=" << cfg.read_repeats
+                  << " loaded_find_ratio=" << cfg.loaded_find_ratio
+                  << " loaded_get_ratio=" << cfg.loaded_get_ratio
                   << " phases=";
         bool first_phase = true;
         for (const auto& phase : cfg.phases) {
@@ -719,7 +735,8 @@ int main(int argc, char** argv) {
     const auto usage_after_load = loaded.memory_usage();
 
     std::vector<StringId> loaded_ids;
-    if ((has_phase(cfg, "find_loaded") || has_phase(cfg, "get_loaded")) && has_phase(cfg, "load")) {
+    if ((has_phase(cfg, "find_loaded") || has_phase(cfg, "get_loaded") || has_phase(cfg, "steady_loaded")) &&
+        has_phase(cfg, "load")) {
         loaded_ids.reserve(loaded.live_size());
         loaded.for_each_live([&](StringId id, std::string_view) { loaded_ids.push_back(id); });
     }
@@ -749,6 +766,27 @@ int main(int argc, char** argv) {
     }
     print_metric("get_string_loaded", loaded_get_ms,
                  has_phase(cfg, "get_loaded") ? loaded_ids.size() * cfg.read_repeats : 0);
+
+    double loaded_steady_ms = 0.0;
+    std::size_t loaded_steady_ops = 0;
+    if (has_phase(cfg, "steady_loaded")) {
+        loaded_steady_ms = run_ms([&] {
+            for (std::size_t repeat = 0; repeat < cfg.read_repeats; ++repeat) {
+                for (const auto id : loaded_ids) {
+                    const auto value = loaded.get_string(id);
+                    for (std::size_t i = 0; i < cfg.loaded_find_ratio; ++i) {
+                        sink += loaded.find_id(value).value_or(0);
+                    }
+                    for (std::size_t i = 0; i < cfg.loaded_get_ratio; ++i) {
+                        sink += loaded.get_string(id).size();
+                    }
+                }
+            }
+        });
+        loaded_steady_ops =
+            loaded_ids.size() * cfg.read_repeats * (cfg.loaded_find_ratio + cfg.loaded_get_ratio);
+    }
+    print_metric("steady_loaded", loaded_steady_ms, loaded_steady_ops);
 
     std::cout << "phase=delta_heavy\n";
     print_memory("rss_before", rss_before);
