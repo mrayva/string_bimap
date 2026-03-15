@@ -10,9 +10,11 @@ option(STRING_BIMAP_USE_MARISA "Enable marisa-trie-backed static index when mari
 option(STRING_BIMAP_USE_KEYVI "Enable keyvi-backed static index when keyvi headers and dependencies are available" ON)
 option(STRING_BIMAP_USE_FSST "Enable FSST-compressed static payload backend when a local FSST checkout is available" ON)
 option(STRING_BIMAP_USE_HAT_TRIE "Enable hat-trie-backed mutable index when hat-trie headers are available" ON)
+option(STRING_BIMAP_USE_ARRAY_HASH "Enable array-hash-backed mutable index when array-hash headers are available" ON)
 
 set(STRING_BIMAP_KEYVI_ROOT "" CACHE PATH "Optional keyvi source or install root")
 set(STRING_BIMAP_FSST_ROOT "" CACHE PATH "Optional FSST source root")
+set(STRING_BIMAP_ARRAY_HASH_ROOT "" CACHE PATH "Optional array-hash source root")
 
 add_library(string_bimap INTERFACE)
 add_library(string_bimap::string_bimap ALIAS string_bimap)
@@ -182,6 +184,28 @@ if(STRING_BIMAP_USE_HAT_TRIE)
                 $<BUILD_INTERFACE:${STRING_BIMAP_HAT_TRIE_INCLUDE_DIR}>
         )
         target_compile_definitions(string_bimap INTERFACE STRING_BIMAP_HAS_HAT_TRIE=1)
+    endif()
+endif()
+
+if(STRING_BIMAP_USE_ARRAY_HASH)
+    set(STRING_BIMAP_ARRAY_HASH_INCLUDE_DIR "")
+    if(STRING_BIMAP_ARRAY_HASH_ROOT)
+        if(EXISTS "${STRING_BIMAP_ARRAY_HASH_ROOT}/include/tsl/array_map.h")
+            set(STRING_BIMAP_ARRAY_HASH_INCLUDE_DIR "${STRING_BIMAP_ARRAY_HASH_ROOT}/include")
+        elseif(EXISTS "${STRING_BIMAP_ARRAY_HASH_ROOT}/tsl/array_map.h")
+            set(STRING_BIMAP_ARRAY_HASH_INCLUDE_DIR "${STRING_BIMAP_ARRAY_HASH_ROOT}")
+        endif()
+    endif()
+    if(NOT STRING_BIMAP_ARRAY_HASH_INCLUDE_DIR)
+        find_path(STRING_BIMAP_ARRAY_HASH_INCLUDE_DIR tsl/array_map.h)
+    endif()
+    if(STRING_BIMAP_ARRAY_HASH_INCLUDE_DIR)
+        target_include_directories(
+            string_bimap
+            INTERFACE
+                $<BUILD_INTERFACE:${STRING_BIMAP_ARRAY_HASH_INCLUDE_DIR}>
+        )
+        target_compile_definitions(string_bimap INTERFACE STRING_BIMAP_HAS_ARRAY_HASH=1)
     endif()
 endif()
 

@@ -6,6 +6,10 @@
 
 #include "../types.hpp"
 
+#if defined(STRING_BIMAP_HAS_ARRAY_HASH)
+#include <tsl/array_map.h>
+#endif
+
 namespace string_bimap::detail {
 
 struct TransparentHash {
@@ -75,5 +79,34 @@ inline void map_reserve(StringIdMap& map, std::size_t size) {
     }
     return total;
 }
+
+#if defined(STRING_BIMAP_HAS_ARRAY_HASH)
+using ArrayStringIdMap = tsl::array_map<char, StringId>;
+
+class CountingSerializer {
+public:
+    template <class U>
+    void operator()(const U&) {
+        bytes_ += sizeof(U);
+    }
+
+    void operator()(const char*, std::size_t value_size) {
+        bytes_ += value_size;
+    }
+
+    [[nodiscard]] std::size_t bytes() const noexcept {
+        return bytes_;
+    }
+
+private:
+    std::size_t bytes_ = 0;
+};
+
+[[nodiscard]] inline std::size_t estimate_map_memory_bytes(const ArrayStringIdMap& map) {
+    CountingSerializer serializer;
+    map.serialize(serializer);
+    return serializer.bytes();
+}
+#endif
 
 }  // namespace string_bimap::detail

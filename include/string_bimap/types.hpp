@@ -18,6 +18,8 @@ enum class BackendProfile : std::uint8_t {
     CompactMemoryFst = 3,
     CompactMemoryKeyvi = 4,
     CompactMemoryMarisaFsst = 5,
+    FastLookupArrayMap = 6,
+    CompactMemoryMarisaArrayMap = 7,
 };
 
 struct LookupResult {

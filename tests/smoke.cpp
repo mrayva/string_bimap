@@ -53,6 +53,7 @@ void expect(bool condition, const char* message) {
         case BackendProfile::CompactMemory:
             return path + ".compact.xcdat";
         case BackendProfile::CompactMemoryMarisa:
+        case BackendProfile::CompactMemoryMarisaArrayMap:
             return path + ".compact.marisa";
         case BackendProfile::CompactMemoryMarisaFsst:
             return {};
@@ -60,6 +61,8 @@ void expect(bool condition, const char* message) {
             return path + ".compact.keyvi";
         case BackendProfile::CompactMemoryFst:
             return path + ".compact.fst";
+        case BackendProfile::FastLookupArrayMap:
+            return {};
         case BackendProfile::FastLookup:
             return {};
     }
@@ -68,14 +71,17 @@ void expect(bool condition, const char* message) {
 
 [[nodiscard]] bool compact_backend_uses_ids_sidecar(BackendProfile profile) {
     return profile == BackendProfile::CompactMemory ||
-           profile == BackendProfile::CompactMemoryMarisa;
+           profile == BackendProfile::CompactMemoryMarisa ||
+           profile == BackendProfile::CompactMemoryMarisaArrayMap;
 }
 
 template <class Fn>
 void for_each_profile(Fn&& fn) {
     fn(BackendProfile::FastLookup);
+    fn(BackendProfile::FastLookupArrayMap);
     fn(BackendProfile::CompactMemory);
     fn(BackendProfile::CompactMemoryMarisa);
+    fn(BackendProfile::CompactMemoryMarisaArrayMap);
 #if defined(STRING_BIMAP_HAS_FSST)
     fn(BackendProfile::CompactMemoryMarisaFsst);
 #endif
@@ -387,6 +393,7 @@ void test_compact_native_sidecars() {
         std::filesystem::remove(path + ".compact.xcdat");
         std::filesystem::remove(path + ".compact.marisa");
         std::filesystem::remove(path + ".compact.keyvi");
+        std::filesystem::remove(path + ".compact.fst");
         std::filesystem::remove(ids_path);
 
         dict.save(path);
@@ -412,6 +419,7 @@ void test_compact_native_sidecars() {
         std::filesystem::remove(path + ".compact.xcdat");
         std::filesystem::remove(path + ".compact.marisa");
         std::filesystem::remove(path + ".compact.keyvi");
+        std::filesystem::remove(path + ".compact.fst");
         std::filesystem::remove(ids_path);
     };
 #if defined(STRING_BIMAP_HAS_XCDAT)
@@ -443,6 +451,7 @@ void test_save_compacted_preserves_ids_and_sidecars() {
         std::filesystem::remove(path + ".compact.xcdat");
         std::filesystem::remove(path + ".compact.marisa");
         std::filesystem::remove(path + ".compact.keyvi");
+        std::filesystem::remove(path + ".compact.fst");
         std::filesystem::remove(ids_path);
 
         dict.save_compacted(path);
@@ -470,6 +479,7 @@ void test_save_compacted_preserves_ids_and_sidecars() {
         std::filesystem::remove(path + ".compact.xcdat");
         std::filesystem::remove(path + ".compact.marisa");
         std::filesystem::remove(path + ".compact.keyvi");
+        std::filesystem::remove(path + ".compact.fst");
         std::filesystem::remove(ids_path);
     };
 #if defined(STRING_BIMAP_HAS_XCDAT)
@@ -591,8 +601,16 @@ void test_backend_profile_explicit_selection() {
     StringBimap compact(0, BackendProfile::CompactMemory);
     expect(compact.backend_profile() == BackendProfile::CompactMemory, "compact profile should be selectable");
 
+    StringBimap array_map(0, BackendProfile::FastLookupArrayMap);
+    expect(array_map.backend_profile() == BackendProfile::FastLookupArrayMap,
+           "array_map profile should be selectable");
+
     StringBimap marisa(0, BackendProfile::CompactMemoryMarisa);
     expect(marisa.backend_profile() == BackendProfile::CompactMemoryMarisa, "marisa profile should be selectable");
+
+    StringBimap marisa_array_map(0, BackendProfile::CompactMemoryMarisaArrayMap);
+    expect(marisa_array_map.backend_profile() == BackendProfile::CompactMemoryMarisaArrayMap,
+           "marisa_array_map profile should be selectable");
 
     StringBimap keyvi(0, BackendProfile::CompactMemoryKeyvi);
     expect(keyvi.backend_profile() == BackendProfile::CompactMemoryKeyvi, "keyvi profile should be selectable");

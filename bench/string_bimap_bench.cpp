@@ -73,6 +73,10 @@ struct Config {
             return "keyvi";
         case BackendProfile::CompactMemoryFst:
             return "fst";
+        case BackendProfile::FastLookupArrayMap:
+            return "array_map";
+        case BackendProfile::CompactMemoryMarisaArrayMap:
+            return "marisa_array_map";
     }
     return "unknown";
 }
@@ -143,6 +147,10 @@ struct Config {
                 cfg.profile = BackendProfile::CompactMemoryKeyvi;
             } else if (value == "fst") {
                 cfg.profile = BackendProfile::CompactMemoryFst;
+            } else if (value == "array_map") {
+                cfg.profile = BackendProfile::FastLookupArrayMap;
+            } else if (value == "marisa_array_map") {
+                cfg.profile = BackendProfile::CompactMemoryMarisaArrayMap;
             } else {
                 throw std::invalid_argument("invalid profile: " + std::string(value));
             }
@@ -541,11 +549,14 @@ int main(int argc, char** argv) {
     std::cout << ",keyvi";
 #endif
     std::cout << ",fst\n";
-#if defined(STRING_BIMAP_HAS_HAT_TRIE)
-    std::cout << "compiled_delta_index=hat-trie\n";
-#else
-    std::cout << "compiled_delta_index=unordered_map\n";
+    std::cout << "compiled_delta_index=unordered_map";
+#if defined(STRING_BIMAP_HAS_ARRAY_HASH)
+    std::cout << ",array_map";
 #endif
+#if defined(STRING_BIMAP_HAS_HAT_TRIE)
+    std::cout << ",hat-trie";
+#endif
+    std::cout << '\n';
     std::cout << "selected_profile=" << profile_name(cfg.profile) << '\n';
 
     StringBimap dict(0, cfg.profile);

@@ -341,7 +341,9 @@ public:
         const bool has_keyvi_sidecar =
             std::filesystem::exists(detail::compact_keyvi_sidecar_path(path));
         if ((profile == BackendProfile::CompactMemory && has_xcdat_sidecars) ||
-            (profile == BackendProfile::CompactMemoryMarisa && has_marisa_sidecars) ||
+            ((profile == BackendProfile::CompactMemoryMarisa ||
+              profile == BackendProfile::CompactMemoryMarisaArrayMap) &&
+             has_marisa_sidecars) ||
             (profile == BackendProfile::CompactMemoryKeyvi && has_keyvi_sidecar) ||
             (profile == BackendProfile::CompactMemoryFst && has_fst_sidecar)) {
             loaded_native_compact = dict.base_.load_native_compact_index(std::move(items), path);
@@ -350,6 +352,7 @@ public:
             dict.base_.rebuild(std::move(items));
             if ((profile == BackendProfile::CompactMemory ||
                  profile == BackendProfile::CompactMemoryMarisa ||
+                 profile == BackendProfile::CompactMemoryMarisaArrayMap ||
                  profile == BackendProfile::CompactMemoryKeyvi ||
                  profile == BackendProfile::CompactMemoryFst) &&
                 dict.base_.has_native_compact_index()) {

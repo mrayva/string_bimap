@@ -165,7 +165,9 @@ public:
         }
 #endif
 #if defined(STRING_BIMAP_HAS_MARISA)
-        if (profile_ == BackendProfile::CompactMemoryMarisa && marisa_ready_) {
+        if ((profile_ == BackendProfile::CompactMemoryMarisa ||
+             profile_ == BackendProfile::CompactMemoryMarisaArrayMap) &&
+            marisa_ready_) {
             return true;
         }
 #endif
@@ -241,7 +243,8 @@ public:
         (void)items;
 #endif
 #if defined(STRING_BIMAP_HAS_MARISA)
-        if (profile_ == BackendProfile::CompactMemoryMarisa) {
+        if (profile_ == BackendProfile::CompactMemoryMarisa ||
+            profile_ == BackendProfile::CompactMemoryMarisaArrayMap) {
             try {
                 rebuild_storage(items);
                 fallback_index_.clear();
@@ -589,6 +592,7 @@ private:
     [[nodiscard]] bool use_marisa_index() const noexcept {
 #if defined(STRING_BIMAP_HAS_MARISA)
         return (profile_ == BackendProfile::CompactMemoryMarisa ||
+                profile_ == BackendProfile::CompactMemoryMarisaArrayMap ||
                 profile_ == BackendProfile::CompactMemoryMarisaFsst) &&
                marisa_ready_;
 #else
@@ -742,6 +746,7 @@ private:
 #endif
 #if defined(STRING_BIMAP_HAS_MARISA)
         if (profile_ == BackendProfile::CompactMemoryMarisa ||
+            profile_ == BackendProfile::CompactMemoryMarisaArrayMap ||
             profile_ == BackendProfile::CompactMemoryMarisaFsst) {
             marisa::Keyset keyset;
             for (const auto& key : keys) {

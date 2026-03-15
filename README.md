@@ -14,21 +14,27 @@ The design is:
 
 - static base segment with explicit backend selection:
   - `FastLookup`: fallback map-based indexing
+  - `FastLookupArrayMap`: fallback static base plus `array-hash` delta
   - `CompactMemory`: optional `xcdat` for the base when compiled in
   - `CompactMemoryMarisa`: optional `marisa-trie` for the base when compiled in
+  - `CompactMemoryMarisaArrayMap`: `marisa-trie` base plus `array-hash` delta
   - `CompactMemoryMarisaFsst`: experimental `marisa-trie` base index plus FSST-compressed base payload
   - `CompactMemoryKeyvi`: optional `keyvi` for the base when compiled in
 - mutable delta segment backed by a packed arena plus:
   - `FastLookup`: `std::unordered_map`
+  - `FastLookupArrayMap`: optional `tsl::array_map` when compiled in
   - compact profiles: optional `hat-trie` when compiled in
+  - `CompactMemoryMarisaArrayMap`: optional `tsl::array_map` when compiled in
 - exact tombstones keyed by stable global IDs
 
 The backend is selected per dictionary:
 
 ```cpp
 string_bimap::StringBimap fast(0, string_bimap::BackendProfile::FastLookup);
+string_bimap::StringBimap array_map(0, string_bimap::BackendProfile::FastLookupArrayMap);
 string_bimap::StringBimap compact(0, string_bimap::BackendProfile::CompactMemory);
 string_bimap::StringBimap marisa(0, string_bimap::BackendProfile::CompactMemoryMarisa);
+string_bimap::StringBimap marisa_array_map(0, string_bimap::BackendProfile::CompactMemoryMarisaArrayMap);
 string_bimap::StringBimap marisa_fsst(0, string_bimap::BackendProfile::CompactMemoryMarisaFsst);
 string_bimap::StringBimap keyvi(0, string_bimap::BackendProfile::CompactMemoryKeyvi);
 ```
@@ -76,6 +82,8 @@ If `keyvi` headers and dependencies are available, the build enables the `Compac
 
 If `tsl/htrie_map.h` is available through your toolchain or include path, the build enables the optional compact-memory delta backend. Otherwise that profile falls back to `std::unordered_map`.
 
+If `tsl/array_map.h` is available through your toolchain or include path, the build enables the `FastLookupArrayMap` and `CompactMemoryMarisaArrayMap` delta variants. This repo supports pointing CMake at a local checkout with `-DSTRING_BIMAP_ARRAY_HASH_ROOT=/path/to/array-hash`.
+
 ## Build With vcpkg
 
 The repository includes local overlay ports for `xcdat` and `hat-trie` under `vcpkg_ports/`.
@@ -121,7 +129,9 @@ The benchmark reports bulk insert, exact lookup, reverse lookup, prefix traversa
 On the benchmarked real datasets so far:
 
 - `FastLookup` is still the default recommendation for point-query-heavy workloads.
+- `FastLookupArrayMap` is now a useful experimental delta-only profile when lookup and mutable-memory footprint matter more than insert speed.
 - `CompactMemoryMarisa` currently looks like the stronger experimental compact backend overall.
+- `CompactMemoryMarisaArrayMap` is the explicit combined profile for a compact `marisa` base with the leaner `array_map` mutable overlay.
 - `CompactMemory` (`xcdat`) is still competitive on shorter identifier-like corpora where it can be slightly smaller.
 - `CompactMemoryMarisaFsst` is kept as an experimental payload-compression backend only. In the current implementation it underperformed plain `marisa` on both the stock/SEC corpora and an attempted Wikipedia run, and it can be removed later without affecting the mainline design.
 - `CompactMemoryKeyvi` is kept as an experimental backend only. On the completed stock/SEC runs it underperformed both `marisa` and usually `xcdat`, and an attempted Wikipedia compact run was still running after `4m19s` at roughly `7.0 GB RSS`.
@@ -164,7 +174,9 @@ The table below summarizes the stock-style real-dataset results from the depende
 At this point the tradeoff is consistent:
 
 - `FastLookup` wins clearly on insert, exact lookup, compaction, and load latency.
+- `FastLookupArrayMap` uses materially less mutable-index memory than `FastLookup`, and on read-heavy delta workloads it can improve exact lookup at the cost of slower inserts.
 - Among the compact backends, `CompactMemoryMarisa` is usually much faster on compaction and load.
+- `CompactMemoryMarisaArrayMap` is the profile to evaluate if you want `marisa` on the static base but also want the delta to favor lookup and memory over write speed.
 - `CompactMemory` can still be slightly smaller on shorter identifier-like columns.
 - `CompactMemoryMarisa` is often smaller on longer text columns.
 - `CompactMemoryFst` is occasionally compact on short-key corpora, but it is not competitive overall on large compact/save/load runs.
@@ -236,6 +248,72 @@ The table above was produced with the dependency-backed benchmark binary:
 ./build-vcpkg/string_bimap_bench --csv /tmp/SEC_CIKs_Symbols.csv --column Name --profile compact
 ./build-vcpkg/string_bimap_bench --csv /tmp/SEC_CIKs_Symbols.csv --column Name --profile marisa
 ./build-vcpkg/string_bimap_bench --csv /tmp/SEC_CIKs_Symbols.csv --column Name --profile fst
+```
+
+Delta-heavy exact-lookup benchmarks for the `array_map` delta profile were run from a dedicated local build using `-DSTRING_BIMAP_ARRAY_HASH_ROOT=/tmp/array-hash`. These are the most relevant current comparisons for the mutable layer:
+
+| Dataset | Profile | Insert ns/op | Find ns/op | Get ns/op | Delta Internal Bytes |
+| --- | --- | ---: | ---: | ---: | ---: |
+| `StockETFList / Symbol` | `fast` | 731.7 | 221.1 | 233.3 | 3.38 MB |
+| `StockETFList / Symbol` | `array_map` | 1194.8 | 207.2 | 223.5 | 1.71 MB |
+| `StockETFList / Symbol` | `compact` (`hat-trie`) | 1669.5 | 376.1 | 390.6 | 1.38 MB |
+| `StockETFList / Company Name` | `fast` | 886.2 | 348.9 | 392.5 | 5.85 MB |
+| `StockETFList / Company Name` | `array_map` | 1447.5 | 320.5 | 324.1 | 4.69 MB |
+| `CUSIP / cusip` | `fast` | 732.7 | 224.9 | 230.9 | 5.43 MB |
+| `CUSIP / cusip` | `array_map` | 1116.5 | 227.8 | 243.9 | 2.74 MB |
+| `Naskitis distinct_1 + skew1_1` | `fast` | 1685.1 | 459.6 | 516.1 | 2.66 GB |
+| `Naskitis distinct_1 + skew1_1` | `array_map` | 1918.1 | 375.8 | 427.3 | 1.38 GB |
+| `Naskitis distinct_1 + skew1_1` | `compact` (`hat-trie`) | 2483.6 | 598.7 | 643.5 | 1.13 GB |
+
+The explicit combined profile `marisa_array_map` behaved as expected in the vcpkg-backed build: on `StockETFList / Symbol` it measured `insert 1256.5 ns/op`, `find 219.3 ns/op`, `get 222.2 ns/op`, and on the Naskitis split workload it measured `insert 1900.5 ns/op`, `find 355.9 ns/op`, `get 417.1 ns/op` with `1.38 GB` mutable internal bytes. In other words, for pre-compaction delta-heavy workloads it behaves like the `array_map` delta profile, while still selecting `marisa` for the compacted static base.
+
+These `array_map` runs were produced with:
+
+```sh
+cmake -S . -B build-array-ninja -G Ninja \
+  -DSTRING_BIMAP_ARRAY_HASH_ROOT=/tmp/array-hash \
+  -DSTRING_BIMAP_USE_ARRAY_HASH=ON
+cmake --build build-array-ninja --target string_bimap_bench string_bimap_smoke_test
+ctest --test-dir build-array-ninja --output-on-failure
+
+./build-array-ninja/string_bimap_bench --csv /tmp/StockETFList --column Symbol --profile fast --phases insert,find,get
+./build-array-ninja/string_bimap_bench --csv /tmp/StockETFList --column Symbol --profile array_map --phases insert,find,get
+./build-vcpkg/string_bimap_bench --csv /tmp/StockETFList --column Symbol --profile compact --phases insert,find,get
+
+./build-array-ninja/string_bimap_bench --csv /tmp/StockETFList --column "Company Name" --profile fast --phases insert,find,get
+./build-array-ninja/string_bimap_bench --csv /tmp/StockETFList --column "Company Name" --profile array_map --phases insert,find,get
+
+./build-array-ninja/string_bimap_bench --csv /tmp/CUSIP.csv --column cusip --profile fast --phases insert,find,get
+./build-array-ninja/string_bimap_bench --csv /tmp/CUSIP.csv --column cusip --profile array_map --phases insert,find,get
+
+./build-array-ninja/string_bimap_bench \
+  --line-file-write /tmp/naskitis/distinct_1 \
+  --line-file-read /tmp/naskitis/skew1_1 \
+  --profile fast \
+  --phases insert,find,get \
+  --read-limit 1000000
+
+./build-array-ninja/string_bimap_bench \
+  --line-file-write /tmp/naskitis/distinct_1 \
+  --line-file-read /tmp/naskitis/skew1_1 \
+  --profile array_map \
+  --phases insert,find,get \
+  --read-limit 1000000
+
+./build-vcpkg-array/string_bimap_bench --csv /tmp/StockETFList --column Symbol --profile marisa_array_map --phases insert,find,get
+./build-vcpkg-array/string_bimap_bench \
+  --line-file-write /tmp/naskitis/distinct_1 \
+  --line-file-read /tmp/naskitis/skew1_1 \
+  --profile marisa_array_map \
+  --phases insert,find,get \
+  --read-limit 1000000
+
+./build-vcpkg/string_bimap_bench \
+  --line-file-write /tmp/naskitis/distinct_1 \
+  --line-file-read /tmp/naskitis/skew1_1 \
+  --profile compact \
+  --phases insert,find,get \
+  --read-limit 1000000
 ```
 
 The Wikipedia rows were produced with:

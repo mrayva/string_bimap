@@ -15,6 +15,9 @@
 #if defined(STRING_BIMAP_HAS_HAT_TRIE)
 #include <tsl/htrie_map.h>
 #endif
+#if defined(STRING_BIMAP_HAS_ARRAY_HASH)
+#include <tsl/array_map.h>
+#endif
 
 namespace string_bimap {
 
@@ -28,6 +31,15 @@ public:
     }
 
     [[nodiscard]] std::optional<StringId> find_id(std::string_view value) const {
+        if (use_array_map_index()) {
+#if defined(STRING_BIMAP_HAS_ARRAY_HASH)
+            const auto it = array_map_index_.find(value);
+            if (it == array_map_index_.end()) {
+                return std::nullopt;
+            }
+            return it.value();
+#endif
+        }
         if (use_compact_index()) {
 #if defined(STRING_BIMAP_HAS_HAT_TRIE)
             const auto it = compact_index_.find(value);
@@ -62,7 +74,16 @@ public:
         }
         const auto location = arena_.append(value);
         entries_by_id_[id] = location;
-        if (use_compact_index()) {
+        if (use_array_map_index()) {
+#if defined(STRING_BIMAP_HAS_ARRAY_HASH)
+            const auto it = array_map_index_.find(value);
+            if (it == array_map_index_.end()) {
+                array_map_index_.insert(value, id);
+            } else {
+                it.value() = id;
+            }
+#endif
+        } else if (use_compact_index()) {
 #if defined(STRING_BIMAP_HAS_HAT_TRIE)
             const auto it = compact_index_.find(value);
             if (it == compact_index_.end()) {
@@ -82,7 +103,14 @@ public:
             return false;
         }
         const auto value = get_string(id);
-        if (use_compact_index()) {
+        if (use_array_map_index()) {
+#if defined(STRING_BIMAP_HAS_ARRAY_HASH)
+            const auto it = array_map_index_.find(value);
+            if (it != array_map_index_.end() && it.value() == id) {
+                array_map_index_.erase(value);
+            }
+#endif
+        } else if (use_compact_index()) {
 #if defined(STRING_BIMAP_HAS_HAT_TRIE)
             const auto it = compact_index_.find(value);
             if (it != compact_index_.end() && it.value() == id) {
@@ -113,6 +141,12 @@ public:
         usage.arena_bytes = arena_.bytes_reserved();
         usage.entry_table_bytes = entries_by_id_.capacity() * sizeof(EntryLocation);
         usage.fallback_index_bytes = detail::estimate_map_memory_bytes(fallback_index_);
+#if defined(STRING_BIMAP_HAS_ARRAY_HASH)
+        if (use_array_map_index()) {
+            usage.compact_index_bytes += detail::estimate_map_memory_bytes(array_map_index_);
+            usage.fallback_index_bytes = 0;
+        }
+#endif
 #if defined(STRING_BIMAP_HAS_HAT_TRIE)
         if (use_compact_index()) {
             usage.compact_index_bytes += compact_index_serialized_bytes();
@@ -171,6 +205,9 @@ public:
         arena_.clear(reserve_bytes);
         entries_by_id_.clear();
         fallback_index_.clear();
+#if defined(STRING_BIMAP_HAS_ARRAY_HASH)
+        array_map_index_.clear();
+#endif
 #if defined(STRING_BIMAP_HAS_HAT_TRIE)
         compact_index_.clear();
 #endif
@@ -207,7 +244,18 @@ private:
 
     [[nodiscard]] bool use_compact_index() const noexcept {
 #if defined(STRING_BIMAP_HAS_HAT_TRIE)
-        return profile_ != BackendProfile::FastLookup;
+        return profile_ != BackendProfile::FastLookup &&
+               profile_ != BackendProfile::FastLookupArrayMap &&
+               profile_ != BackendProfile::CompactMemoryMarisaArrayMap;
+#else
+        return false;
+#endif
+    }
+
+    [[nodiscard]] bool use_array_map_index() const noexcept {
+#if defined(STRING_BIMAP_HAS_ARRAY_HASH)
+        return profile_ == BackendProfile::FastLookupArrayMap ||
+               profile_ == BackendProfile::CompactMemoryMarisaArrayMap;
 #else
         return false;
 #endif
@@ -216,6 +264,9 @@ private:
     PackedStringArena arena_;
     std::vector<EntryLocation> entries_by_id_;
     detail::StringIdMap fallback_index_;
+#if defined(STRING_BIMAP_HAS_ARRAY_HASH)
+    detail::ArrayStringIdMap array_map_index_;
+#endif
 #if defined(STRING_BIMAP_HAS_HAT_TRIE)
     tsl::htrie_map<char, StringId> compact_index_;
 #endif
