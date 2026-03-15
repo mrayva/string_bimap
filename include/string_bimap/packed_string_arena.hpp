@@ -50,6 +50,10 @@ public:
         return bytes_.size();
     }
 
+    [[nodiscard]] std::size_t bytes_reserved() const noexcept {
+        return bytes_.capacity();
+    }
+
     void clear(std::size_t reserve_bytes = 0) {
         bytes_.clear();
         bytes_.reserve(reserve_bytes + 1);

@@ -3,6 +3,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <istream>
 #include <ostream>
 #include <stdexcept>
@@ -13,7 +14,7 @@
 namespace string_bimap::detail {
 
 inline constexpr std::array<char, 8> kFileMagic = {'F', 'S', 'S', 'T', 'P', 'L', 'U', 'S'};
-inline constexpr std::uint32_t kFormatVersion = 1;
+inline constexpr std::uint32_t kFormatVersion = 2;
 
 template <class T>
 void write_pod(std::ostream& out, const T& value) {
@@ -51,6 +52,51 @@ inline std::string read_string(std::istream& in, std::size_t size) {
         }
     }
     return value;
+}
+
+inline std::string compact_trie_sidecar_path(const std::string& path) {
+    return path + ".compact.xcdat";
+}
+
+inline std::string compact_ids_sidecar_path(const std::string& path) {
+    return path + ".compact.ids";
+}
+
+template <class T>
+void write_vector_file(const std::string& path, const std::vector<T>& values) {
+    static_assert(std::is_trivially_copyable<T>::value, "T must be trivially copyable");
+    std::ofstream out(path, std::ios::binary);
+    if (!out) {
+        throw std::runtime_error("failed to open vector sidecar for writing: " + path);
+    }
+    const std::uint64_t count = static_cast<std::uint64_t>(values.size());
+    write_pod(out, count);
+    if (!values.empty()) {
+        out.write(reinterpret_cast<const char*>(values.data()),
+                  static_cast<std::streamsize>(values.size() * sizeof(T)));
+        if (!out) {
+            throw std::runtime_error("failed to write vector sidecar payload: " + path);
+        }
+    }
+}
+
+template <class T>
+std::vector<T> read_vector_file(const std::string& path) {
+    static_assert(std::is_trivially_copyable<T>::value, "T must be trivially copyable");
+    std::ifstream in(path, std::ios::binary);
+    if (!in) {
+        throw std::runtime_error("failed to open vector sidecar for reading: " + path);
+    }
+    const auto count = read_pod<std::uint64_t>(in);
+    std::vector<T> values(static_cast<std::size_t>(count));
+    if (!values.empty()) {
+        in.read(reinterpret_cast<char*>(values.data()),
+                static_cast<std::streamsize>(values.size() * sizeof(T)));
+        if (!in) {
+            throw std::runtime_error("failed to read vector sidecar payload: " + path);
+        }
+    }
+    return values;
 }
 
 }  // namespace string_bimap::detail

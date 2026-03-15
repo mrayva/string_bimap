@@ -1,6 +1,9 @@
 #pragma once
 
+#include <algorithm>
+#include <array>
 #include <cstddef>
+#include <filesystem>
 #include <fstream>
 #include <istream>
 #include <ostream>
@@ -30,8 +33,13 @@ namespace string_bimap {
 // - Thread safety is external. Concurrent mutation or mutation during iteration is unsupported.
 class StringBimap {
 public:
-    explicit StringBimap(std::size_t delta_reserve_bytes = 0)
-        : delta_(delta_reserve_bytes) {}
+    explicit StringBimap(std::size_t delta_reserve_bytes = 0,
+                         BackendProfile profile = BackendProfile::FastLookup)
+        : base_(profile), delta_(delta_reserve_bytes, profile), profile_(profile) {}
+
+    [[nodiscard]] BackendProfile backend_profile() const noexcept {
+        return profile_;
+    }
 
     // Returns the stable ID of a live string if present.
     [[nodiscard]] std::optional<StringId> find_id(std::string_view value) const {
@@ -121,6 +129,15 @@ public:
         return live_size_ == 0;
     }
 
+    [[nodiscard]] StringBimapMemoryUsage memory_usage() const noexcept {
+        StringBimapMemoryUsage usage;
+        usage.base = base_.memory_usage();
+        usage.delta = delta_.memory_usage();
+        usage.tombstone_bytes = tombstones_.memory_usage_bytes();
+        usage.bookkeeping_bytes = sizeof(*this);
+        return usage;
+    }
+
     // Iterates over live entries in increasing stable ID order.
     // The callback receives (StringId, std::string_view).
     // Mutating the dictionary from inside the callback is unsupported.
@@ -138,8 +155,36 @@ public:
     // stable ID order. Mutating the dictionary from inside the callback is unsupported.
     template <class Func>
     void for_each_with_prefix(std::string_view prefix, Func&& func) const {
-        for_each_live([&](StringId id, std::string_view value) {
-            if (value.substr(0, prefix.size()) == prefix) {
+        std::vector<StringId> ids;
+        base_.for_each_with_prefix(prefix, [&](StringId id, std::string_view) {
+            if (!tombstones_.contains(id)) {
+                ids.push_back(id);
+            }
+        });
+        delta_.for_each_with_prefix(prefix, [&](StringId id, std::string_view) {
+            if (!tombstones_.contains(id)) {
+                ids.push_back(id);
+            }
+        });
+        std::sort(ids.begin(), ids.end());
+        for (const auto id : ids) {
+            func(id, get_string(id));
+        }
+    }
+
+    // Iterates over live entries whose value starts with prefix, but does not
+    // guarantee stable ID order. This may be faster than for_each_with_prefix()
+    // when the underlying trie backends can enumerate matches directly.
+    // Mutating the dictionary from inside the callback is unsupported.
+    template <class Func>
+    void for_each_with_prefix_unordered(std::string_view prefix, Func&& func) const {
+        base_.for_each_with_prefix_unordered(prefix, [&](StringId id, std::string_view value) {
+            if (!tombstones_.contains(id)) {
+                func(id, value);
+            }
+        });
+        delta_.for_each_with_prefix_unordered(prefix, [&](StringId id, std::string_view value) {
+            if (!tombstones_.contains(id)) {
                 func(id, value);
             }
         });
@@ -151,6 +196,7 @@ public:
         detail::write_bytes(out, detail::kFileMagic.data(), detail::kFileMagic.size());
         detail::write_pod(out, detail::kFormatVersion);
         detail::write_pod(out, next_id_);
+        detail::write_pod(out, profile_);
         detail::write_pod(out, static_cast<std::uint64_t>(live_size_));
 
         for_each_live([&](StringId id, std::string_view value) {
@@ -166,6 +212,35 @@ public:
             throw std::runtime_error("failed to open file for dictionary serialization: " + path);
         }
         save(out);
+
+#if defined(STRING_BIMAP_HAS_XCDAT)
+        const auto trie_path = detail::compact_trie_sidecar_path(path);
+        const auto ids_path = detail::compact_ids_sidecar_path(path);
+        if (base_.has_native_compact_index() && delta_.size() == 0 && tombstones_.empty()) {
+            base_.save_native_compact_index(trie_path, ids_path);
+        } else {
+            std::error_code ec;
+            std::filesystem::remove(trie_path, ec);
+            std::filesystem::remove(ids_path, ec);
+        }
+#endif
+    }
+
+    // Saves a compacted snapshot to path without mutating the original dictionary.
+    // This is the easiest way to guarantee native compact sidecars for file persistence.
+    void save_compacted(const std::string& path) const {
+        StringBimap snapshot(0, profile_);
+        snapshot.next_id_ = next_id_;
+        snapshot.live_size_ = live_size_;
+        std::vector<BaseSegment::BuildItem> items;
+        items.reserve(live_size_);
+        for_each_live([&](StringId id, std::string_view value) {
+            items.push_back(BaseSegment::BuildItem{id, std::string(value)});
+        });
+        snapshot.base_.rebuild(std::move(items));
+        snapshot.delta_.clear();
+        snapshot.tombstones_.clear();
+        snapshot.save(path);
     }
 
     // Loads a dictionary previously saved with save(). The loaded dictionary is
@@ -178,12 +253,18 @@ public:
         }
 
         const auto version = detail::read_pod<std::uint32_t>(in);
-        if (version != detail::kFormatVersion) {
+        if (version != 1 && version != detail::kFormatVersion) {
             throw std::runtime_error("unsupported serialized dictionary version");
         }
 
-        StringBimap dict;
-        dict.next_id_ = detail::read_pod<StringId>(in);
+        const auto next_id = detail::read_pod<StringId>(in);
+        BackendProfile profile = BackendProfile::FastLookup;
+        if (version >= 2) {
+            profile = detail::read_pod<BackendProfile>(in);
+        }
+
+        StringBimap dict(0, profile);
+        dict.next_id_ = next_id;
 
         const auto live_count = detail::read_pod<std::uint64_t>(in);
         std::vector<BaseSegment::BuildItem> items;
@@ -208,7 +289,59 @@ public:
         if (!in) {
             throw std::runtime_error("failed to open file for dictionary deserialization: " + path);
         }
-        return load(in);
+        std::array<char, detail::kFileMagic.size()> magic{};
+        in.read(magic.data(), static_cast<std::streamsize>(magic.size()));
+        if (!in || magic != detail::kFileMagic) {
+            throw std::runtime_error("invalid serialized dictionary header");
+        }
+
+        const auto version = detail::read_pod<std::uint32_t>(in);
+        if (version != 1 && version != detail::kFormatVersion) {
+            throw std::runtime_error("unsupported serialized dictionary version");
+        }
+
+        const auto next_id = detail::read_pod<StringId>(in);
+        BackendProfile profile = BackendProfile::FastLookup;
+        if (version >= 2) {
+            profile = detail::read_pod<BackendProfile>(in);
+        }
+
+        StringBimap dict(0, profile);
+        dict.next_id_ = next_id;
+
+        const auto live_count = detail::read_pod<std::uint64_t>(in);
+        std::vector<BaseSegment::BuildItem> items;
+        items.reserve(static_cast<std::size_t>(live_count));
+
+        for (std::uint64_t i = 0; i < live_count; ++i) {
+            const auto id = detail::read_pod<StringId>(in);
+            const auto size = detail::read_pod<std::uint64_t>(in);
+            const auto value = detail::read_string(in, static_cast<std::size_t>(size));
+            items.push_back(BaseSegment::BuildItem{id, value});
+        }
+
+#if defined(STRING_BIMAP_HAS_XCDAT)
+        bool loaded_native_compact = false;
+        const auto trie_path = detail::compact_trie_sidecar_path(path);
+        const auto ids_path = detail::compact_ids_sidecar_path(path);
+        if (profile == BackendProfile::CompactMemory) {
+            if (std::filesystem::exists(trie_path) && std::filesystem::exists(ids_path)) {
+                loaded_native_compact = dict.base_.load_native_compact_index(std::move(items), trie_path, ids_path);
+            }
+        }
+        if (!loaded_native_compact) {
+            dict.base_.rebuild(std::move(items));
+            if (profile == BackendProfile::CompactMemory && dict.base_.has_native_compact_index()) {
+                dict.base_.save_native_compact_index(trie_path, ids_path);
+            }
+        }
+#else
+        dict.base_.rebuild(std::move(items));
+#endif
+        dict.delta_.clear();
+        dict.tombstones_.clear();
+        dict.live_size_ = static_cast<std::size_t>(live_count);
+        return dict;
     }
 
     // Rebuilds internal storage while preserving all live IDs.
@@ -236,6 +369,7 @@ private:
     BaseSegment base_;
     DeltaSegment delta_;
     Tombstones tombstones_;
+    BackendProfile profile_ = BackendProfile::FastLookup;
     StringId next_id_ = 0;
     std::size_t live_size_ = 0;
 };

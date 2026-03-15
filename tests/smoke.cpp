@@ -2,6 +2,7 @@
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <iostream>
 #include <sstream>
 #include <optional>
@@ -19,6 +20,7 @@
 namespace {
 
 using string_bimap::StringBimap;
+using string_bimap::BackendProfile;
 using string_bimap::StringId;
 
 [[nodiscard]] std::string make_string(std::mt19937& rng, std::size_t max_len = 24) {
@@ -46,8 +48,15 @@ void expect(bool condition, const char* message) {
     }
 }
 
-void test_basic_insert_erase_compact() {
-    StringBimap dict;
+template <class Fn>
+void for_each_profile(Fn&& fn) {
+    fn(BackendProfile::FastLookup);
+    fn(BackendProfile::CompactMemory);
+}
+
+void test_basic_insert_erase_compact(BackendProfile profile) {
+    StringBimap dict(0, profile);
+    expect(dict.backend_profile() == profile, "backend profile should round-trip through construction");
 
     const auto empty_id = dict.insert("");
     const auto apple_id = dict.insert("apple");
@@ -81,8 +90,8 @@ void test_basic_insert_erase_compact() {
     expect(dict.live_size() == 3, "live size should remain correct after compaction");
 }
 
-void test_delete_reinsert_gets_new_id() {
-    StringBimap dict;
+void test_delete_reinsert_gets_new_id(BackendProfile profile) {
+    StringBimap dict(0, profile);
 
     const auto id1 = dict.insert("alpha");
     expect(dict.erase("alpha"), "erase by value should succeed");
@@ -100,8 +109,8 @@ void test_delete_reinsert_gets_new_id() {
     expect(dict.get_string(id2) == std::string_view("alpha"), "new id should still decode after compaction");
 }
 
-void test_contains_id_and_invalid_erases() {
-    StringBimap dict;
+void test_contains_id_and_invalid_erases(BackendProfile profile) {
+    StringBimap dict(0, profile);
 
     const auto a = dict.insert("a");
     const auto b = dict.insert("b");
@@ -117,8 +126,8 @@ void test_contains_id_and_invalid_erases() {
     expect(dict.contains_id(b), "other id should stay live");
 }
 
-void test_compaction_preserves_live_ids_over_many_cycles() {
-    StringBimap dict;
+void test_compaction_preserves_live_ids_over_many_cycles(BackendProfile profile) {
+    StringBimap dict(0, profile);
     std::unordered_map<std::string, StringId> ids;
 
     for (int round = 0; round < 5; ++round) {
@@ -143,9 +152,9 @@ void test_compaction_preserves_live_ids_over_many_cycles() {
     }
 }
 
-void test_randomized_model() {
+void test_randomized_model(BackendProfile profile) {
     std::mt19937 rng(0xC0FFEEu);
-    StringBimap dict;
+    StringBimap dict(0, profile);
 
     std::unordered_map<std::string, StringId> live_by_value;
     std::unordered_map<StringId, std::string> live_by_id;
@@ -224,8 +233,8 @@ void test_randomized_model() {
     }
 }
 
-void test_serialization_round_trip_stream() {
-    StringBimap dict;
+void test_serialization_round_trip_stream(BackendProfile profile) {
+    StringBimap dict(0, profile);
 
     const auto empty_id = dict.insert("");
     const auto alpha_id = dict.insert("alpha");
@@ -241,6 +250,7 @@ void test_serialization_round_trip_stream() {
 
     auto restored = StringBimap::load(buffer);
 
+    expect(restored.backend_profile() == profile, "serialized profile should round-trip");
     expect(restored.size() == dict.size(), "serialized next_id should round-trip");
     expect(restored.live_size() == dict.live_size(), "serialized live size should round-trip");
     expect(restored.get_string(empty_id) == std::string_view(""), "empty string should round-trip");
@@ -251,8 +261,8 @@ void test_serialization_round_trip_stream() {
     expect(!restored.contains_id(beta_id), "deleted id hole should remain absent after load");
 }
 
-void test_serialization_round_trip_file() {
-    StringBimap dict;
+void test_serialization_round_trip_file(BackendProfile profile) {
+    StringBimap dict(0, profile);
 
     std::unordered_map<std::string, StringId> ids;
     for (int i = 0; i < 40; ++i) {
@@ -274,6 +284,7 @@ void test_serialization_round_trip_file() {
     dict.save(path);
     auto restored = StringBimap::load(path);
 
+    expect(restored.backend_profile() == profile, "file round-trip should preserve profile");
     expect(restored.size() == dict.size(), "file round-trip should preserve next_id");
     expect(restored.live_size() == ids.size(), "file round-trip should preserve live count");
     for (const auto& [key, id] : ids) {
@@ -282,8 +293,69 @@ void test_serialization_round_trip_file() {
     }
 }
 
-void test_iteration_api() {
-    StringBimap dict;
+void test_compact_native_sidecars() {
+#if defined(STRING_BIMAP_HAS_XCDAT)
+    StringBimap dict(0, BackendProfile::CompactMemory);
+    const auto alpha = dict.insert("alpha");
+    const auto beta = dict.insert("beta");
+    dict.compact();
+
+    const std::string path = "/tmp/string_bimap_compact_native.bin";
+    const std::string trie_path = path + ".compact.xcdat";
+    const std::string ids_path = path + ".compact.ids";
+    std::filesystem::remove(path);
+    std::filesystem::remove(trie_path);
+    std::filesystem::remove(ids_path);
+
+    dict.save(path);
+
+    expect(std::filesystem::exists(trie_path), "compact trie sidecar should be written");
+    expect(std::filesystem::exists(ids_path), "compact id sidecar should be written");
+
+    auto restored = StringBimap::load(path);
+    expect(restored.find_id("alpha").value() == alpha, "native compact load should preserve alpha");
+    expect(restored.find_id("beta").value() == beta, "native compact load should preserve beta");
+
+    std::filesystem::remove(path);
+    std::filesystem::remove(trie_path);
+    std::filesystem::remove(ids_path);
+#endif
+}
+
+void test_save_compacted_preserves_ids_and_sidecars() {
+#if defined(STRING_BIMAP_HAS_XCDAT)
+    StringBimap dict(0, BackendProfile::CompactMemory);
+    const auto alpha = dict.insert("alpha");
+    const auto beta = dict.insert("beta");
+    expect(dict.erase(beta), "beta erase before save_compacted should succeed");
+    const auto gamma = dict.insert("gamma");
+
+    const std::string path = "/tmp/string_bimap_save_compacted.bin";
+    const std::string trie_path = path + ".compact.xcdat";
+    const std::string ids_path = path + ".compact.ids";
+    std::filesystem::remove(path);
+    std::filesystem::remove(trie_path);
+    std::filesystem::remove(ids_path);
+
+    dict.save_compacted(path);
+
+    expect(std::filesystem::exists(trie_path), "save_compacted should emit compact trie sidecar");
+    expect(std::filesystem::exists(ids_path), "save_compacted should emit compact id sidecar");
+
+    auto restored = StringBimap::load(path);
+    expect(restored.find_id("alpha").value() == alpha, "save_compacted should preserve alpha id");
+    expect(restored.find_id("gamma").value() == gamma, "save_compacted should preserve gamma id");
+    expect(!restored.contains("beta"), "save_compacted should preserve deleted beta");
+    expect(!restored.contains_id(beta), "save_compacted should preserve deleted beta hole");
+
+    std::filesystem::remove(path);
+    std::filesystem::remove(trie_path);
+    std::filesystem::remove(ids_path);
+#endif
+}
+
+void test_iteration_api(BackendProfile profile) {
+    StringBimap dict(0, profile);
 
     const auto alpha = dict.insert("alpha");
     const auto empty = dict.insert("");
@@ -316,6 +388,7 @@ void test_iteration_api() {
     dict.save(buffer);
     buffer.seekg(0);
     auto restored = StringBimap::load(buffer);
+    expect(restored.backend_profile() == profile, "iteration load should preserve profile");
 
     std::vector<std::pair<StringId, std::string>> after_load;
     restored.for_each_live([&](StringId id, std::string_view value) {
@@ -324,8 +397,8 @@ void test_iteration_api() {
     expect(after_load == seen, "iteration should round-trip through serialization");
 }
 
-void test_prefix_query_api() {
-    StringBimap dict;
+void test_prefix_query_api(BackendProfile profile) {
+    StringBimap dict(0, profile);
 
     const auto app = dict.insert("app");
     const auto apple = dict.insert("apple");
@@ -368,24 +441,45 @@ void test_prefix_query_api() {
     dict.save(buffer);
     buffer.seekg(0);
     auto restored = StringBimap::load(buffer);
+    expect(restored.backend_profile() == profile, "prefix load should preserve profile");
 
     std::vector<std::pair<StringId, std::string>> after_load;
     restored.for_each_with_prefix("app", [&](StringId id, std::string_view value) {
         after_load.emplace_back(id, std::string(value));
     });
     expect(after_load == seen, "prefix query should round-trip through serialization");
+
+    std::vector<std::pair<StringId, std::string>> unordered_seen;
+    restored.for_each_with_prefix_unordered("app", [&](StringId id, std::string_view value) {
+        unordered_seen.emplace_back(id, std::string(value));
+    });
+    std::sort(unordered_seen.begin(), unordered_seen.end());
+    expect(unordered_seen == seen, "unordered prefix query should return the same live matches");
+}
+
+void test_backend_profile_explicit_selection() {
+    StringBimap fast(0, BackendProfile::FastLookup);
+    expect(fast.backend_profile() == BackendProfile::FastLookup, "fast profile should be selectable");
+
+    StringBimap compact(0, BackendProfile::CompactMemory);
+    expect(compact.backend_profile() == BackendProfile::CompactMemory, "compact profile should be selectable");
 }
 
 }  // namespace
 
 int main() {
-    test_basic_insert_erase_compact();
-    test_delete_reinsert_gets_new_id();
-    test_contains_id_and_invalid_erases();
-    test_compaction_preserves_live_ids_over_many_cycles();
-    test_randomized_model();
-    test_serialization_round_trip_stream();
-    test_serialization_round_trip_file();
-    test_iteration_api();
-    test_prefix_query_api();
+    test_backend_profile_explicit_selection();
+    for_each_profile([](BackendProfile profile) {
+        test_basic_insert_erase_compact(profile);
+        test_delete_reinsert_gets_new_id(profile);
+        test_contains_id_and_invalid_erases(profile);
+        test_compaction_preserves_live_ids_over_many_cycles(profile);
+        test_randomized_model(profile);
+        test_serialization_round_trip_stream(profile);
+        test_serialization_round_trip_file(profile);
+        test_iteration_api(profile);
+        test_prefix_query_api(profile);
+    });
+    test_compact_native_sidecars();
+    test_save_compacted_preserves_ids_and_sidecars();
 }

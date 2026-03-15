@@ -52,6 +52,10 @@ public:
         return std::all_of(words_.begin(), words_.end(), [](std::uint64_t word) { return word == 0; });
     }
 
+    [[nodiscard]] std::size_t memory_usage_bytes() const noexcept {
+        return sizeof(*this) + words_.capacity() * sizeof(std::uint64_t);
+    }
+
 private:
     std::vector<std::uint64_t> words_;
 };

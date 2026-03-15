@@ -4,6 +4,7 @@ project(string_bimap LANGUAGES CXX VERSION 0.1.0)
 
 option(STRING_BIMAP_BUILD_EXAMPLES "Build examples" ON)
 option(STRING_BIMAP_BUILD_TESTS "Build test executables" ON)
+option(STRING_BIMAP_BUILD_BENCHMARKS "Build benchmark executables" ON)
 option(STRING_BIMAP_USE_XCDAT "Enable xcdat-backed static index when xcdat headers are available" ON)
 option(STRING_BIMAP_USE_HAT_TRIE "Enable hat-trie-backed mutable index when hat-trie headers are available" ON)
 
@@ -80,4 +81,9 @@ if(STRING_BIMAP_BUILD_TESTS)
     add_executable(string_bimap_smoke_test tests/smoke.cpp)
     target_link_libraries(string_bimap_smoke_test PRIVATE string_bimap::string_bimap)
     add_test(NAME string_bimap_smoke_test COMMAND string_bimap_smoke_test)
+endif()
+
+if(STRING_BIMAP_BUILD_BENCHMARKS)
+    add_executable(string_bimap_bench bench/string_bimap_bench.cpp)
+    target_link_libraries(string_bimap_bench PRIVATE string_bimap::string_bimap)
 endif()

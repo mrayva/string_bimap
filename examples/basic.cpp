@@ -3,7 +3,9 @@
 #include <string_bimap/string_bimap.hpp>
 
 int main() {
-    string_bimap::StringBimap dict;
+    string_bimap::StringBimap dict(0, string_bimap::BackendProfile::FastLookup);
+
+    std::cout << "profile=fast_lookup\n";
 
     const auto alpha = dict.insert("alpha");
     const auto beta = dict.insert("beta");
