@@ -54,6 +54,8 @@ void expect(bool condition, const char* message) {
             return path + ".compact.xcdat";
         case BackendProfile::CompactMemoryMarisa:
             return path + ".compact.marisa";
+        case BackendProfile::CompactMemoryMarisaFsst:
+            return {};
         case BackendProfile::CompactMemoryKeyvi:
             return path + ".compact.keyvi";
         case BackendProfile::CompactMemoryFst:
@@ -74,6 +76,9 @@ void for_each_profile(Fn&& fn) {
     fn(BackendProfile::FastLookup);
     fn(BackendProfile::CompactMemory);
     fn(BackendProfile::CompactMemoryMarisa);
+#if defined(STRING_BIMAP_HAS_FSST)
+    fn(BackendProfile::CompactMemoryMarisaFsst);
+#endif
     fn(BackendProfile::CompactMemoryKeyvi);
     fn(BackendProfile::CompactMemoryFst);
 }

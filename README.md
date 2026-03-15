@@ -16,6 +16,7 @@ The design is:
   - `FastLookup`: fallback map-based indexing
   - `CompactMemory`: optional `xcdat` for the base when compiled in
   - `CompactMemoryMarisa`: optional `marisa-trie` for the base when compiled in
+  - `CompactMemoryMarisaFsst`: experimental `marisa-trie` base index plus FSST-compressed base payload
   - `CompactMemoryKeyvi`: optional `keyvi` for the base when compiled in
 - mutable delta segment backed by a packed arena plus:
   - `FastLookup`: `std::unordered_map`
@@ -28,6 +29,7 @@ The backend is selected per dictionary:
 string_bimap::StringBimap fast(0, string_bimap::BackendProfile::FastLookup);
 string_bimap::StringBimap compact(0, string_bimap::BackendProfile::CompactMemory);
 string_bimap::StringBimap marisa(0, string_bimap::BackendProfile::CompactMemoryMarisa);
+string_bimap::StringBimap marisa_fsst(0, string_bimap::BackendProfile::CompactMemoryMarisaFsst);
 string_bimap::StringBimap keyvi(0, string_bimap::BackendProfile::CompactMemoryKeyvi);
 ```
 
@@ -67,6 +69,8 @@ ctest --test-dir build --output-on-failure
 If `xcdat.hpp` is available through your toolchain or include path, the build enables the `CompactMemory` static backend. Otherwise that profile falls back to the standard-library static index.
 
 If `marisa.h` and `libmarisa` are available through your toolchain or include path, the build enables the `CompactMemoryMarisa` static backend. Otherwise that profile falls back to the standard-library static index.
+
+If `fsst.h` plus the local FSST source tree are available, the build can enable the experimental `CompactMemoryMarisaFsst` backend. This repo currently expects a local DuckDB/FSST checkout via `-DSTRING_BIMAP_FSST_ROOT=/path/to/fsst`.
 
 If `keyvi` headers and dependencies are available, the build enables the `CompactMemoryKeyvi` static backend. This repo supports pointing CMake at a local checkout with `-DSTRING_BIMAP_KEYVI_ROOT=/path/to/keyvi`.
 
@@ -119,6 +123,7 @@ On the benchmarked real datasets so far:
 - `FastLookup` is still the default recommendation for point-query-heavy workloads.
 - `CompactMemoryMarisa` currently looks like the stronger experimental compact backend overall.
 - `CompactMemory` (`xcdat`) is still competitive on shorter identifier-like corpora where it can be slightly smaller.
+- `CompactMemoryMarisaFsst` is kept as an experimental payload-compression backend only. In the current implementation it underperformed plain `marisa` on both the stock/SEC corpora and an attempted Wikipedia run, and it can be removed later without affecting the mainline design.
 - `CompactMemoryKeyvi` is kept as an experimental backend only. On the completed stock/SEC runs it underperformed both `marisa` and usually `xcdat`, and an attempted Wikipedia compact run was still running after `4m19s` at roughly `7.0 GB RSS`.
 - `CompactMemoryFst` is now available as an experimental FST backend, but current results do not make it a preferred choice.
 
@@ -167,6 +172,19 @@ At this point the tradeoff is consistent:
 - If you want a compact backend, start by evaluating `CompactMemoryMarisa` on your real corpus.
 - Keep `CompactMemory` in the mix if minimum footprint on short code/ticker keys matters most.
 - Treat `CompactMemoryFst` as experimental only.
+
+`CompactMemoryMarisaFsst` is intentionally not included in the main comparison tables. The current implementation keeps `marisa` for `string -> id` and stores the compact base payload with FSST, but the auxiliary state needed to support `get_string(id) -> std::string_view` erased the expected memory win.
+
+Representative results from the dedicated FSST build:
+
+| Dataset | Column | Profile | Load ns/op | Find Loaded ns/op | Get Loaded ns/op | Internal After Load |
+| --- | --- | --- | ---: | ---: | ---: | ---: |
+| `StockETFList` | `Symbol` | `marisa` | 523.61 | n/a | n/a | 0.80 MB |
+| `StockETFList` | `Symbol` | `marisa_fsst` | 3170.95 | n/a | n/a | 2.76 MB |
+| `CUSIP.csv` | `description` | `marisa` | 589.22 | 3161.42 | 32.49 | 3.10 MB |
+| `CUSIP.csv` | `description` | `marisa_fsst` | 8486.21 | 3239.05 | 29.12 | 5.40 MB |
+
+An attempted Wikipedia `marisa_fsst` compact/save run in the dedicated FSST build was stopped after `4m10s` at roughly `8.4 GB RSS`, which was already materially worse than the completed `marisa` compact run. The backend remains in-tree only as an experiment and is a candidate for future removal if it does not improve.
 
 Wikipedia titles tell the same story at larger scale. Using `/tmp/enwiki-latest-all-titles-in-ns0.keys.txt` with compact snapshots:
 

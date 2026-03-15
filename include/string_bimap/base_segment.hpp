@@ -24,6 +24,9 @@
 #if defined(STRING_BIMAP_HAS_MARISA)
 #include <marisa.h>
 #endif
+#if defined(STRING_BIMAP_HAS_FSST)
+#include <fsst.h>
+#endif
 #if defined(STRING_BIMAP_HAS_KEYVI)
 #include <keyvi/dictionary/dictionary.h>
 #include <keyvi/dictionary/dictionary_types.h>
@@ -109,6 +112,9 @@ public:
         if (!contains_id(id)) {
             return {};
         }
+        if (use_marisa_fsst_payload()) {
+            return decode_fsst_string(id);
+        }
         return arena_.view(entries_by_id_[id]);
     }
 
@@ -121,6 +127,14 @@ public:
         usage.arena_bytes = arena_.bytes_reserved();
         usage.entry_table_bytes = entries_by_id_.capacity() * sizeof(EntryLocation);
         usage.fallback_index_bytes = detail::estimate_map_memory_bytes(fallback_index_);
+#if defined(STRING_BIMAP_HAS_FSST)
+        if (use_marisa_fsst_payload()) {
+            usage.arena_bytes = fsst_payload_.capacity();
+            usage.auxiliary_bytes += fsst_uncompressed_lengths_.capacity() * sizeof(std::uint32_t);
+            usage.auxiliary_bytes += fsst_decoder_header_.capacity();
+            usage.auxiliary_bytes += fsst_cache_memory_bytes();
+        }
+#endif
 #if defined(STRING_BIMAP_HAS_XCDAT)
         if (use_xcdat_index()) {
             usage.compact_index_bytes += local_to_global_.capacity() * sizeof(StringId);
@@ -425,6 +439,20 @@ private:
     }
 
     void rebuild_storage(std::vector<BuildItem>& items) {
+        if (profile_ == BackendProfile::CompactMemoryMarisaFsst) {
+            rebuild_storage_fsst(items);
+            return;
+        }
+
+#if defined(STRING_BIMAP_HAS_FSST)
+        fsst_payload_.clear();
+        fsst_uncompressed_lengths_.clear();
+        fsst_decoder_header_.clear();
+        fsst_decoder_ = {};
+        fsst_cache_.clear();
+        fsst_ready_ = false;
+#endif
+
         std::sort(items.begin(), items.end(), [](const BuildItem& lhs, const BuildItem& rhs) {
             if (lhs.id != rhs.id) {
                 return lhs.id < rhs.id;
@@ -448,6 +476,108 @@ private:
             ++live_size_;
         }
     }
+
+    void rebuild_storage_fsst(std::vector<BuildItem>& items) {
+#if defined(STRING_BIMAP_HAS_FSST)
+        std::sort(items.begin(), items.end(), [](const BuildItem& lhs, const BuildItem& rhs) {
+            if (lhs.id != rhs.id) {
+                return lhs.id < rhs.id;
+            }
+            return lhs.value < rhs.value;
+        });
+
+        StringId max_id = 0;
+        std::size_t total_input_bytes = 0;
+        for (const auto& item : items) {
+            max_id = std::max(max_id, item.id);
+            total_input_bytes += item.value.size();
+        }
+
+        arena_.clear();
+        entries_by_id_.assign(items.empty() ? 0 : static_cast<std::size_t>(max_id) + 1, EntryLocation{});
+        live_size_ = items.size();
+        fsst_payload_.clear();
+        fsst_payload_.push_back('\0');
+        fsst_uncompressed_lengths_.assign(entries_by_id_.size(), 0);
+        fsst_cache_.assign(entries_by_id_.size(), std::string());
+        fsst_decoder_header_.clear();
+        fsst_decoder_ = {};
+        fsst_ready_ = false;
+
+        if (items.empty()) {
+            return;
+        }
+
+        std::vector<size_t> len_in(items.size());
+        std::vector<unsigned char*> str_in(items.size());
+        for (std::size_t i = 0; i < items.size(); ++i) {
+            len_in[i] = items[i].value.size();
+            str_in[i] = reinterpret_cast<unsigned char*>(items[i].value.data());
+        }
+
+        duckdb_fsst_encoder_t* encoder =
+            duckdb_fsst_create(items.size(), len_in.data(), str_in.data(), 0);
+        if (!encoder) {
+            throw std::runtime_error("fsst encoder creation failed");
+        }
+
+        try {
+            fsst_decoder_header_.resize(FSST_MAXHEADER);
+            const auto header_size =
+                duckdb_fsst_export(encoder, reinterpret_cast<unsigned char*>(fsst_decoder_header_.data()));
+            fsst_decoder_header_.resize(header_size);
+            if (header_size == 0 ||
+                duckdb_fsst_import(&fsst_decoder_,
+                                   reinterpret_cast<unsigned char*>(fsst_decoder_header_.data())) == 0) {
+                throw std::runtime_error("fsst decoder export/import failed");
+            }
+
+            const std::size_t output_capacity = total_input_bytes == 0 ? 1 : (7 + 2 * total_input_bytes);
+            std::vector<unsigned char> compressed(output_capacity);
+            std::vector<size_t> len_out(items.size());
+            std::vector<unsigned char*> str_out(items.size());
+            const auto compressed_strings = duckdb_fsst_compress(
+                encoder,
+                items.size(),
+                len_in.data(),
+                str_in.data(),
+                compressed.size(),
+                compressed.data(),
+                len_out.data(),
+                str_out.data());
+            if (compressed_strings != items.size()) {
+                throw std::runtime_error("fsst compression output buffer too small");
+            }
+
+            fsst_payload_.reserve(compressed.size() + 1);
+            for (std::size_t i = 0; i < items.size(); ++i) {
+                const auto offset = static_cast<std::uint32_t>(fsst_payload_.size());
+                const auto length = static_cast<std::uint32_t>(len_out[i]);
+                fsst_payload_.insert(
+                    fsst_payload_.end(),
+                    reinterpret_cast<const char*>(str_out[i]),
+                    reinterpret_cast<const char*>(str_out[i] + len_out[i]));
+                entries_by_id_[items[i].id] = EntryLocation{offset, length};
+                fsst_uncompressed_lengths_[items[i].id] =
+                    static_cast<std::uint32_t>(items[i].value.size());
+            }
+            fsst_payload_.shrink_to_fit();
+            fsst_decoder_header_.shrink_to_fit();
+            fsst_uncompressed_lengths_.shrink_to_fit();
+            fsst_cache_.shrink_to_fit();
+            fsst_ready_ = true;
+        } catch (...) {
+            duckdb_fsst_destroy(encoder);
+            throw;
+        }
+
+        duckdb_fsst_destroy(encoder);
+#else
+        (void)items;
+        throw std::runtime_error("FSST backend requested but FSST support is not compiled in");
+#endif
+    }
+
     [[nodiscard]] bool use_xcdat_index() const noexcept {
 #if defined(STRING_BIMAP_HAS_XCDAT)
         return profile_ == BackendProfile::CompactMemory && trie_.has_value();
@@ -458,7 +588,17 @@ private:
 
     [[nodiscard]] bool use_marisa_index() const noexcept {
 #if defined(STRING_BIMAP_HAS_MARISA)
-        return profile_ == BackendProfile::CompactMemoryMarisa && marisa_ready_;
+        return (profile_ == BackendProfile::CompactMemoryMarisa ||
+                profile_ == BackendProfile::CompactMemoryMarisaFsst) &&
+               marisa_ready_;
+#else
+        return false;
+#endif
+    }
+
+    [[nodiscard]] bool use_marisa_fsst_payload() const noexcept {
+#if defined(STRING_BIMAP_HAS_MARISA) && defined(STRING_BIMAP_HAS_FSST)
+        return profile_ == BackendProfile::CompactMemoryMarisaFsst && marisa_ready_ && fsst_ready_;
 #else
         return false;
 #endif
@@ -503,6 +643,41 @@ private:
         keyvi_sidecar_path_.clear();
         keyvi_sidecar_size_bytes_ = 0;
         keyvi_owns_sidecar_ = false;
+#endif
+    }
+
+    [[nodiscard]] std::size_t fsst_cache_memory_bytes() const noexcept {
+#if defined(STRING_BIMAP_HAS_FSST)
+        std::size_t total = fsst_cache_.capacity() * sizeof(std::string);
+        for (const auto& value : fsst_cache_) {
+            total += value.capacity();
+        }
+        return total;
+#else
+        return 0;
+#endif
+    }
+
+    [[nodiscard]] std::string_view decode_fsst_string(StringId id) const noexcept {
+#if defined(STRING_BIMAP_HAS_FSST)
+        auto& cached = fsst_cache_[id];
+        if (cached.empty() && fsst_uncompressed_lengths_[id] != 0) {
+            const auto& location = entries_by_id_[id];
+            cached.resize(fsst_uncompressed_lengths_[id]);
+            const auto decoded = duckdb_fsst_decompress(
+                const_cast<duckdb_fsst_decoder_t*>(&fsst_decoder_),
+                location.length,
+                reinterpret_cast<const unsigned char*>(fsst_payload_.data() + location.offset),
+                cached.size(),
+                reinterpret_cast<unsigned char*>(cached.data()));
+            if (decoded != cached.size()) {
+                cached.resize(std::min<std::size_t>(decoded, cached.size()));
+            }
+        }
+        return cached;
+#else
+        (void)id;
+        return {};
 #endif
     }
 
@@ -566,7 +741,8 @@ private:
         }
 #endif
 #if defined(STRING_BIMAP_HAS_MARISA)
-        if (profile_ == BackendProfile::CompactMemoryMarisa) {
+        if (profile_ == BackendProfile::CompactMemoryMarisa ||
+            profile_ == BackendProfile::CompactMemoryMarisaFsst) {
             marisa::Keyset keyset;
             for (const auto& key : keys) {
                 keyset.push_back(key);
@@ -634,6 +810,14 @@ private:
 #if defined(STRING_BIMAP_HAS_MARISA)
     marisa::Trie marisa_trie_;
     bool marisa_ready_ = false;
+#endif
+#if defined(STRING_BIMAP_HAS_FSST)
+    std::vector<char> fsst_payload_;
+    std::vector<std::uint32_t> fsst_uncompressed_lengths_;
+    std::vector<unsigned char> fsst_decoder_header_;
+    mutable std::vector<std::string> fsst_cache_;
+    duckdb_fsst_decoder_t fsst_decoder_{};
+    bool fsst_ready_ = false;
 #endif
 #if defined(STRING_BIMAP_HAS_KEYVI)
     std::unique_ptr<keyvi::dictionary::Dictionary> keyvi_dictionary_;

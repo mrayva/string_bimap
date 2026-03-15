@@ -8,9 +8,11 @@ option(STRING_BIMAP_BUILD_BENCHMARKS "Build benchmark executables" ON)
 option(STRING_BIMAP_USE_XCDAT "Enable xcdat-backed static index when xcdat headers are available" ON)
 option(STRING_BIMAP_USE_MARISA "Enable marisa-trie-backed static index when marisa headers and library are available" ON)
 option(STRING_BIMAP_USE_KEYVI "Enable keyvi-backed static index when keyvi headers and dependencies are available" ON)
+option(STRING_BIMAP_USE_FSST "Enable FSST-compressed static payload backend when a local FSST checkout is available" ON)
 option(STRING_BIMAP_USE_HAT_TRIE "Enable hat-trie-backed mutable index when hat-trie headers are available" ON)
 
 set(STRING_BIMAP_KEYVI_ROOT "" CACHE PATH "Optional keyvi source or install root")
+set(STRING_BIMAP_FSST_ROOT "" CACHE PATH "Optional FSST source root")
 
 add_library(string_bimap INTERFACE)
 add_library(string_bimap::string_bimap ALIAS string_bimap)
@@ -22,6 +24,42 @@ target_include_directories(
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
         $<INSTALL_INTERFACE:include>
 )
+
+if(STRING_BIMAP_USE_FSST)
+    set(STRING_BIMAP_FSST_HEADER "")
+    set(STRING_BIMAP_FSST_SOURCE "")
+    if(STRING_BIMAP_FSST_ROOT)
+        if(EXISTS "${STRING_BIMAP_FSST_ROOT}/fsst.h" AND EXISTS "${STRING_BIMAP_FSST_ROOT}/libfsst.cpp")
+            set(STRING_BIMAP_FSST_HEADER "${STRING_BIMAP_FSST_ROOT}")
+            set(STRING_BIMAP_FSST_SOURCE "${STRING_BIMAP_FSST_ROOT}/libfsst.cpp")
+        endif()
+    endif()
+    if(STRING_BIMAP_FSST_HEADER AND STRING_BIMAP_FSST_SOURCE)
+        add_library(string_bimap_fsst STATIC "${STRING_BIMAP_FSST_SOURCE}")
+        set(STRING_BIMAP_FSST_EXTRA_INCLUDE_DIRS "")
+        if(EXISTS "${STRING_BIMAP_FSST_ROOT}/../../src/include")
+            list(APPEND STRING_BIMAP_FSST_EXTRA_INCLUDE_DIRS "${STRING_BIMAP_FSST_ROOT}/../../src/include")
+        endif()
+        target_include_directories(
+            string_bimap_fsst
+            PUBLIC
+                $<BUILD_INTERFACE:${STRING_BIMAP_FSST_HEADER}>
+        )
+        foreach(dir IN LISTS STRING_BIMAP_FSST_EXTRA_INCLUDE_DIRS)
+            if(dir AND EXISTS "${dir}")
+                target_include_directories(
+                    string_bimap_fsst
+                    PUBLIC
+                        $<BUILD_INTERFACE:${dir}>
+                )
+            endif()
+        endforeach()
+        target_compile_features(string_bimap_fsst PUBLIC cxx_std_17)
+        target_compile_definitions(string_bimap_fsst PRIVATE DUCKDB_DEBUG_NO_SAFETY=1)
+        target_link_libraries(string_bimap INTERFACE $<BUILD_INTERFACE:string_bimap_fsst>)
+        target_compile_definitions(string_bimap INTERFACE STRING_BIMAP_HAS_FSST=1)
+    endif()
+endif()
 
 if(STRING_BIMAP_USE_XCDAT)
     find_path(STRING_BIMAP_XCDAT_INCLUDE_DIR xcdat.hpp)

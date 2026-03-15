@@ -67,6 +67,8 @@ struct Config {
             return "compact";
         case BackendProfile::CompactMemoryMarisa:
             return "marisa";
+        case BackendProfile::CompactMemoryMarisaFsst:
+            return "marisa_fsst";
         case BackendProfile::CompactMemoryKeyvi:
             return "keyvi";
         case BackendProfile::CompactMemoryFst:
@@ -135,6 +137,8 @@ struct Config {
                 cfg.profile = BackendProfile::CompactMemory;
             } else if (value == "marisa") {
                 cfg.profile = BackendProfile::CompactMemoryMarisa;
+            } else if (value == "marisa_fsst") {
+                cfg.profile = BackendProfile::CompactMemoryMarisaFsst;
             } else if (value == "keyvi") {
                 cfg.profile = BackendProfile::CompactMemoryKeyvi;
             } else if (value == "fst") {
