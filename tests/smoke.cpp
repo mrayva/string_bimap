@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <iostream>
 #include <sstream>
+#include <limits>
 #include <optional>
 #include <random>
 #include <set>
@@ -517,6 +518,65 @@ void test_native_snapshot_round_trip_file(BackendProfile profile) {
     remove_all_sidecars(path);
 }
 
+void test_compaction_policy_api(BackendProfile profile) {
+    StringBimap dict(0, profile);
+
+    const string_bimap::CompactionPolicy conservative{};
+    expect(!dict.should_compact(conservative), "empty dictionary should not compact");
+
+    for (int i = 0; i < 8; ++i) {
+        const auto inserted = dict.insert("base_" + std::to_string(i));
+        expect(inserted != string_bimap::kInvalidId, "base insert should succeed");
+    }
+    dict.compact();
+
+    const auto before_delta = dict.compaction_stats();
+    expect(before_delta.base_live_ids == 8, "base ids should be counted after compaction");
+    expect(before_delta.delta_live_ids == 0, "delta ids should be empty after compaction");
+    expect(!dict.should_compact(conservative), "freshly compacted dictionary should not compact again");
+
+    for (int i = 0; i < 3; ++i) {
+        const auto inserted = dict.insert("delta_" + std::to_string(i));
+        expect(inserted != string_bimap::kInvalidId, "delta insert should succeed");
+    }
+
+    string_bimap::CompactionPolicy delta_policy;
+    delta_policy.min_delta_ids = 2;
+    delta_policy.max_delta_fraction = 0.20;
+    delta_policy.min_tombstone_ids = 100;
+    delta_policy.max_tombstone_fraction = 1.0;
+    delta_policy.min_delta_bytes = 0;
+    const auto delta_stats = dict.compaction_stats();
+    expect(delta_stats.delta_live_ids == 3, "delta ids should be counted before compaction");
+    expect(dict.should_compact(delta_policy), "delta-heavy dictionary should trigger compaction");
+    expect(dict.compact_if_needed(delta_policy), "compact_if_needed should perform compaction");
+    expect(dict.compaction_stats().delta_live_ids == 0, "compaction should clear the delta");
+
+    StringBimap tombstone_dict(0, profile);
+    for (int i = 0; i < 10; ++i) {
+        const auto inserted = tombstone_dict.insert("item_" + std::to_string(i));
+        expect(inserted != string_bimap::kInvalidId, "tombstone insert should succeed");
+    }
+    for (int i = 0; i < 4; ++i) {
+        expect(tombstone_dict.erase("item_" + std::to_string(i)), "scheduled tombstone erase should succeed");
+    }
+
+    string_bimap::CompactionPolicy tombstone_policy;
+    tombstone_policy.min_delta_ids = 100;
+    tombstone_policy.max_delta_fraction = 1.0;
+    tombstone_policy.min_tombstone_ids = 3;
+    tombstone_policy.max_tombstone_fraction = 0.20;
+    tombstone_policy.min_delta_bytes = std::numeric_limits<std::size_t>::max();
+    const auto tombstone_stats = tombstone_dict.compaction_stats();
+    expect(tombstone_stats.tombstone_ids == 4, "tombstones should be counted");
+    expect(tombstone_dict.should_compact(tombstone_policy),
+           "tombstone-heavy dictionary should trigger compaction");
+    expect(tombstone_dict.compact_if_needed(tombstone_policy),
+           "compact_if_needed should compact tombstone-heavy dictionaries");
+    expect(tombstone_dict.compaction_stats().tombstone_ids == 0,
+           "compaction should clear tombstones");
+}
+
 void test_iteration_api(BackendProfile profile) {
     StringBimap dict(0, profile);
 
@@ -655,6 +715,7 @@ int main() {
         test_serialization_round_trip_stream(profile);
         test_serialization_round_trip_file(profile);
         test_native_snapshot_round_trip_file(profile);
+        test_compaction_policy_api(profile);
         test_iteration_api(profile);
         test_prefix_query_api(profile);
     });

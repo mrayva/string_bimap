@@ -154,6 +154,41 @@ public:
         return usage;
     }
 
+    [[nodiscard]] CompactionStats compaction_stats() const noexcept {
+        return CompactionStats{
+            next_id_,
+            live_size_,
+            base_.size(),
+            delta_.size(),
+            tombstones_.count(),
+            delta_.bytes_used(),
+        };
+    }
+
+    // Returns true if the current mixed base+delta state exceeds the supplied
+    // heuristic thresholds and should be rewritten into a compacted base snapshot.
+    [[nodiscard]] bool should_compact(const CompactionPolicy& policy = {}) const noexcept {
+        const auto stats = compaction_stats();
+        const bool delta_triggered =
+            stats.delta_live_ids >= policy.min_delta_ids &&
+            (stats.delta_fraction() >= policy.max_delta_fraction ||
+             stats.delta_bytes >= policy.min_delta_bytes);
+        const bool tombstone_triggered =
+            stats.tombstone_ids >= policy.min_tombstone_ids &&
+            stats.tombstone_fraction() >= policy.max_tombstone_fraction;
+        return delta_triggered || tombstone_triggered;
+    }
+
+    // Compacts only if should_compact(policy) is true and returns whether a
+    // compaction was performed.
+    bool compact_if_needed(const CompactionPolicy& policy = {}) {
+        if (!should_compact(policy)) {
+            return false;
+        }
+        compact();
+        return true;
+    }
+
     // Iterates over live entries in increasing stable ID order.
     // The callback receives (StringId, std::string_view).
     // Mutating the dictionary from inside the callback is unsupported.

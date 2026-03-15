@@ -62,6 +62,31 @@ struct StringBimapMemoryUsage {
     }
 };
 
+struct CompactionStats {
+    std::size_t total_ids = 0;
+    std::size_t live_ids = 0;
+    std::size_t base_live_ids = 0;
+    std::size_t delta_live_ids = 0;
+    std::size_t tombstone_ids = 0;
+    std::size_t delta_bytes = 0;
+
+    [[nodiscard]] double delta_fraction() const noexcept {
+        return live_ids == 0 ? 0.0 : static_cast<double>(delta_live_ids) / static_cast<double>(live_ids);
+    }
+
+    [[nodiscard]] double tombstone_fraction() const noexcept {
+        return total_ids == 0 ? 0.0 : static_cast<double>(tombstone_ids) / static_cast<double>(total_ids);
+    }
+};
+
+struct CompactionPolicy {
+    std::size_t min_delta_ids = 1024;
+    double max_delta_fraction = 0.15;
+    std::size_t min_tombstone_ids = 1024;
+    double max_tombstone_fraction = 0.10;
+    std::size_t min_delta_bytes = 1 << 20;
+};
+
 using StringView = std::string_view;
 
 }  // namespace string_bimap

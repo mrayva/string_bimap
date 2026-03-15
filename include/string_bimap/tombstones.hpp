@@ -56,6 +56,14 @@ public:
         return sizeof(*this) + words_.capacity() * sizeof(std::uint64_t);
     }
 
+    [[nodiscard]] std::size_t count() const noexcept {
+        std::size_t total = 0;
+        for (const auto word : words_) {
+            total += static_cast<std::size_t>(popcount(word));
+        }
+        return total;
+    }
+
     [[nodiscard]] const std::vector<std::uint64_t>& words() const noexcept {
         return words_;
     }
@@ -65,6 +73,19 @@ public:
     }
 
 private:
+    static unsigned popcount(std::uint64_t value) noexcept {
+#if defined(__clang__) || defined(__GNUC__)
+        return static_cast<unsigned>(__builtin_popcountll(value));
+#else
+        unsigned count = 0;
+        while (value != 0) {
+            value &= (value - 1);
+            ++count;
+        }
+        return count;
+#endif
+    }
+
     std::vector<std::uint64_t> words_;
 };
 

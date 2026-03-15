@@ -52,6 +52,7 @@ If optional dependencies are not compiled in, the compact profiles degrade grace
 - `save(path)` emits native file sidecars for the current in-memory state, including mixed base+delta snapshots.
 - `load(path)` prefers those native sidecars when present and falls back to logical rebuild otherwise.
 - Stream `save(std::ostream&)` and `load(std::istream&)` remain logical-only and never use sidecars.
+- `should_compact(policy)` and `compact_if_needed(policy)` expose a heuristic compaction policy based on delta growth and tombstone accumulation.
 - Empty strings are ignored and never stored.
 
 ## Lifetime And Safety Rules
@@ -566,6 +567,15 @@ int main() {
 
     dict.save("dict.bin");
     auto restored = string_bimap::StringBimap::load("dict.bin");
+
+    string_bimap::CompactionPolicy policy;
+    policy.min_delta_ids = 1024;
+    policy.max_delta_fraction = 0.10;
+    policy.min_tombstone_ids = 1024;
+    policy.max_tombstone_fraction = 0.05;
+    if (dict.should_compact(policy)) {
+        dict.compact();
+    }
 
     dict.save_compacted("dict.compacted.bin");
 
