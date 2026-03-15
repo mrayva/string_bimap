@@ -6,6 +6,7 @@ option(STRING_BIMAP_BUILD_EXAMPLES "Build examples" ON)
 option(STRING_BIMAP_BUILD_TESTS "Build test executables" ON)
 option(STRING_BIMAP_BUILD_BENCHMARKS "Build benchmark executables" ON)
 option(STRING_BIMAP_USE_XCDAT "Enable xcdat-backed static index when xcdat headers are available" ON)
+option(STRING_BIMAP_USE_MARISA "Enable marisa-trie-backed static index when marisa headers and library are available" ON)
 option(STRING_BIMAP_USE_HAT_TRIE "Enable hat-trie-backed mutable index when hat-trie headers are available" ON)
 
 add_library(string_bimap INTERFACE)
@@ -28,6 +29,24 @@ if(STRING_BIMAP_USE_XCDAT)
                 $<BUILD_INTERFACE:${STRING_BIMAP_XCDAT_INCLUDE_DIR}>
         )
         target_compile_definitions(string_bimap INTERFACE STRING_BIMAP_HAS_XCDAT=1)
+    endif()
+endif()
+
+if(STRING_BIMAP_USE_MARISA)
+    find_path(STRING_BIMAP_MARISA_INCLUDE_DIR marisa.h)
+    find_library(STRING_BIMAP_MARISA_LIBRARY NAMES marisa libmarisa)
+    if(STRING_BIMAP_MARISA_INCLUDE_DIR AND STRING_BIMAP_MARISA_LIBRARY)
+        target_include_directories(
+            string_bimap
+            INTERFACE
+                $<BUILD_INTERFACE:${STRING_BIMAP_MARISA_INCLUDE_DIR}>
+        )
+        target_link_libraries(
+            string_bimap
+            INTERFACE
+                $<BUILD_INTERFACE:${STRING_BIMAP_MARISA_LIBRARY}>
+        )
+        target_compile_definitions(string_bimap INTERFACE STRING_BIMAP_HAS_MARISA=1)
     endif()
 endif()
 

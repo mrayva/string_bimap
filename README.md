@@ -15,9 +15,10 @@ The design is:
 - static base segment with explicit backend selection:
   - `FastLookup`: fallback map-based indexing
   - `CompactMemory`: optional `xcdat` for the base when compiled in
+  - `CompactMemoryMarisa`: optional `marisa-trie` for the base when compiled in
 - mutable delta segment backed by a packed arena plus:
   - `FastLookup`: `std::unordered_map`
-  - `CompactMemory`: optional `hat-trie` when compiled in
+  - compact profiles: optional `hat-trie` when compiled in
 - exact tombstones keyed by stable global IDs
 
 The backend is selected per dictionary:
@@ -25,9 +26,10 @@ The backend is selected per dictionary:
 ```cpp
 string_bimap::StringBimap fast(0, string_bimap::BackendProfile::FastLookup);
 string_bimap::StringBimap compact(0, string_bimap::BackendProfile::CompactMemory);
+string_bimap::StringBimap marisa(0, string_bimap::BackendProfile::CompactMemoryMarisa);
 ```
 
-If optional dependencies are not compiled in, `CompactMemory` degrades gracefully to the fallback structures for the missing parts.
+If optional dependencies are not compiled in, the compact profiles degrade gracefully to the fallback structures for the missing parts.
 
 ## Invariants
 
@@ -59,7 +61,9 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
-If `xcdat.hpp` is available through your toolchain or include path, the build enables the optional compact-memory static backend. Otherwise that profile falls back to the standard-library static index.
+If `xcdat.hpp` is available through your toolchain or include path, the build enables the `CompactMemory` static backend. Otherwise that profile falls back to the standard-library static index.
+
+If `marisa.h` and `libmarisa` are available through your toolchain or include path, the build enables the `CompactMemoryMarisa` static backend. Otherwise that profile falls back to the standard-library static index.
 
 If `tsl/htrie_map.h` is available through your toolchain or include path, the build enables the optional compact-memory delta backend. Otherwise that profile falls back to `std::unordered_map`.
 
@@ -71,12 +75,13 @@ The repository includes local overlay ports for `xcdat` and `hat-trie` under `vc
 cmake -S . -B build-vcpkg \
   -DCMAKE_TOOLCHAIN_FILE=/home/mrayva/vcpkg/scripts/buildsystems/vcpkg.cmake \
   -DSTRING_BIMAP_USE_XCDAT=ON \
+  -DSTRING_BIMAP_USE_MARISA=ON \
   -DSTRING_BIMAP_USE_HAT_TRIE=ON
 cmake --build build-vcpkg
 ctest --test-dir build-vcpkg --output-on-failure
 ```
 
-This path installs both dependencies through the manifest and enables the real `xcdat` and `hat-trie` code paths.
+This path installs all optional dependencies through the manifest and enables the real `xcdat`, `marisa-trie`, and `hat-trie` code paths.
 
 ## Benchmark
 
@@ -97,53 +102,127 @@ cmake -S . -B build-vcpkg \
   -DSTRING_BIMAP_USE_HAT_TRIE=ON
 cmake --build build-vcpkg --target string_bimap_bench
 ./build-vcpkg/string_bimap_bench --profile compact 20000 256 12345
+./build-vcpkg/string_bimap_bench --profile marisa 20000 256 12345
 ```
 
 The benchmark reports bulk insert, exact lookup, reverse lookup, prefix traversal, compaction, save, and load timings on a synthetic prefix-heavy dataset. It also prints both the compiled-in optional backends and the selected runtime profile.
 
 ### Current Summary
 
-On the benchmarked stock-style datasets so far, `FastLookup` is the default recommendation for point-query-heavy workloads. `CompactMemory` is mainly justified when steady-state memory matters more than insert/compact/load latency.
+On the benchmarked real datasets so far:
 
-The table below summarizes the current real-dataset results from the dependency-backed build (`xcdat + hat-trie` enabled). Times are nanoseconds per operation; memory is the internal post-load estimate reported by `memory_usage()`.
+- `FastLookup` is still the default recommendation for point-query-heavy workloads.
+- `CompactMemoryMarisa` currently looks like the stronger experimental compact backend overall.
+- `CompactMemory` (`xcdat`) is still competitive on shorter identifier-like corpora where it can be slightly smaller.
+
+The table below summarizes the stock-style real-dataset results from the dependency-backed build. Times are nanoseconds per operation; memory is the internal post-load estimate reported by `memory_usage()`.
 
 | Dataset | Column | Profile | Insert ns/op | Find ns/op | Get ns/op | Compact ns/op | Load ns/op | Internal After Load |
 | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | `StockETFList` | `Symbol` | `fast` | 733.7 | 207.8 | 227.0 | 1061.6 | 984.8 | 2.55 MB |
-| `StockETFList` | `Symbol` | `compact` | 1662.4 | 374.2 | 394.8 | 3491.3 | 3391.9 | 0.76 MB |
+| `StockETFList` | `Symbol` | `compact` | 1686.08 | 372.21 | 399.25 | 3620.47 | 3491.85 | 0.76 MB |
+| `StockETFList` | `Symbol` | `marisa` | 1656.90 | 366.58 | 391.55 | 1443.93 | 1329.13 | 0.83 MB |
 | `StockETFList` | `Company Name` | `fast` | 843.3 | 315.9 | 316.0 | 1345.2 | 1162.3 | 4.20 MB |
-| `StockETFList` | `Company Name` | `compact` | 1855.4 | 427.8 | 492.5 | 8985.6 | 8725.2 | 2.79 MB |
+| `StockETFList` | `Company Name` | `compact` | 1748.42 | 440.15 | 457.36 | 11702.67 | 10347.20 | 2.79 MB |
+| `StockETFList` | `Company Name` | `marisa` | 1921.39 | 542.60 | 590.74 | 3230.05 | 2602.86 | 2.44 MB |
 | `CUSIP.csv` | `cusip` | `fast` | 721.46 | 233.72 | 266.03 | 1158.54 | 1092.01 | 4.32 MB |
-| `CUSIP.csv` | `cusip` | `compact` | 1534.01 | 402.67 | 453.57 | 6213.97 | 5613.43 | 1.54 MB |
+| `CUSIP.csv` | `cusip` | `compact` | 1733.84 | 394.13 | 416.34 | 6478.76 | 5872.09 | 1.54 MB |
+| `CUSIP.csv` | `cusip` | `marisa` | 1521.21 | 393.58 | 416.67 | 1650.35 | 1895.64 | 1.63 MB |
 | `CUSIP.csv` | `symbol` | `fast` | 768.97 | 265.62 | 264.38 | 1163.94 | 1588.19 | 4.10 MB |
-| `CUSIP.csv` | `symbol` | `compact` | 1605.37 | 407.96 | 532.04 | 4981.51 | 4419.81 | 1.26 MB |
+| `CUSIP.csv` | `symbol` | `compact` | 1580.97 | 397.22 | 429.00 | 4716.56 | 4619.25 | 1.26 MB |
+| `CUSIP.csv` | `symbol` | `marisa` | 1589.89 | 380.06 | 436.36 | 1480.84 | 1428.64 | 1.36 MB |
 | `CUSIP.csv` | `description` | `fast` | 945.83 | 449.80 | 514.25 | 1425.14 | 1719.44 | 5.79 MB |
-| `CUSIP.csv` | `description` | `compact` | 1784.17 | 530.81 | 569.33 | 7252.44 | 6992.30 | 3.19 MB |
+| `CUSIP.csv` | `description` | `compact` | 1764.58 | 470.88 | 529.30 | 7541.33 | 7269.51 | 3.19 MB |
+| `CUSIP.csv` | `description` | `marisa` | 1804.52 | 502.10 | 572.40 | 2557.44 | 2403.66 | 2.81 MB |
+| `SEC_CIKs_Symbols.csv` | `cik` | `compact` | 1318.99 | 277.08 | 309.29 | 4715.56 | 4620.10 | 191 KB |
+| `SEC_CIKs_Symbols.csv` | `cik` | `marisa` | 1370.18 | 281.97 | 310.85 | 1449.85 | 1375.40 | 207 KB |
+| `SEC_CIKs_Symbols.csv` | `symbol` | `compact` | 1372.31 | 294.07 | 329.76 | 3129.22 | 3064.90 | 189 KB |
+| `SEC_CIKs_Symbols.csv` | `symbol` | `marisa` | 1369.09 | 296.37 | 330.67 | 1349.17 | 1269.30 | 209 KB |
+| `SEC_CIKs_Symbols.csv` | `Name` | `compact` | 1481.12 | 303.77 | 332.48 | 7272.04 | 7031.88 | 375 KB |
+| `SEC_CIKs_Symbols.csv` | `Name` | `marisa` | 1444.89 | 298.93 | 328.26 | 2136.58 | 1953.43 | 339 KB |
 
 At this point the tradeoff is consistent:
 
 - `FastLookup` wins clearly on insert, exact lookup, compaction, and load latency.
-- `CompactMemory` reduces steady-state memory, sometimes substantially for shorter identifiers.
+- Among the compact backends, `CompactMemoryMarisa` is usually much faster on compaction and load.
+- `CompactMemory` can still be slightly smaller on shorter identifier-like columns.
+- `CompactMemoryMarisa` is often smaller on longer text columns.
 - If point queries are the dominant operation, start with `FastLookup`.
-- If memory pressure is more important than write/load cost, evaluate `CompactMemory` on your real corpus.
+- If you want a compact backend, start by evaluating `CompactMemoryMarisa` on your real corpus.
+- Keep `CompactMemory` in the mix if minimum footprint on short code/ticker keys matters most.
+
+Wikipedia titles tell the same story at larger scale. Using `/tmp/enwiki-latest-all-titles-in-ns0.keys.txt` with compact snapshots:
+
+| Corpus | Profile | Insert | Find | Get | Compact | Save | Load-only | Find Loaded | Get Loaded | Internal After Load |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `enwiki-latest-all-titles-in-ns0` | `compact` | 63.4 s | 28.0 s | 33.4 s | 210.2 s | 187.1 s | 8.95 s | 3975.81 ns/op | 32.28 ns/op | 708 MB |
+| `enwiki-latest-all-titles-in-ns0` | `marisa` | 63.2 s | 29.2 s | 34.9 s | 86.3 s | 72.3 s | 8.91 s | 2144.53 ns/op | 32.25 ns/op | 688 MB |
 
 The table above was produced with the dependency-backed benchmark binary:
 
 ```sh
 ./build-vcpkg/string_bimap_bench --csv /tmp/StockETFList --column Symbol --profile fast
 ./build-vcpkg/string_bimap_bench --csv /tmp/StockETFList --column Symbol --profile compact
+./build-vcpkg/string_bimap_bench --csv /tmp/StockETFList --column Symbol --profile marisa
 ./build-vcpkg/string_bimap_bench --csv /tmp/StockETFList --column "Company Name" --profile fast
 ./build-vcpkg/string_bimap_bench --csv /tmp/StockETFList --column "Company Name" --profile compact
+./build-vcpkg/string_bimap_bench --csv /tmp/StockETFList --column "Company Name" --profile marisa
 
 ./build-vcpkg/string_bimap_bench --csv /tmp/CUSIP.csv --column cusip --profile fast
 ./build-vcpkg/string_bimap_bench --csv /tmp/CUSIP.csv --column cusip --profile compact
+./build-vcpkg/string_bimap_bench --csv /tmp/CUSIP.csv --column cusip --profile marisa
 ./build-vcpkg/string_bimap_bench --csv /tmp/CUSIP.csv --column symbol --profile fast
 ./build-vcpkg/string_bimap_bench --csv /tmp/CUSIP.csv --column symbol --profile compact
+./build-vcpkg/string_bimap_bench --csv /tmp/CUSIP.csv --column symbol --profile marisa
 ./build-vcpkg/string_bimap_bench --csv /tmp/CUSIP.csv --column description --profile fast
 ./build-vcpkg/string_bimap_bench --csv /tmp/CUSIP.csv --column description --profile compact
+./build-vcpkg/string_bimap_bench --csv /tmp/CUSIP.csv --column description --profile marisa
+
+./build-vcpkg/string_bimap_bench --csv /tmp/SEC_CIKs_Symbols.csv --column cik --profile compact
+./build-vcpkg/string_bimap_bench --csv /tmp/SEC_CIKs_Symbols.csv --column cik --profile marisa
+./build-vcpkg/string_bimap_bench --csv /tmp/SEC_CIKs_Symbols.csv --column symbol --profile compact
+./build-vcpkg/string_bimap_bench --csv /tmp/SEC_CIKs_Symbols.csv --column symbol --profile marisa
+./build-vcpkg/string_bimap_bench --csv /tmp/SEC_CIKs_Symbols.csv --column Name --profile compact
+./build-vcpkg/string_bimap_bench --csv /tmp/SEC_CIKs_Symbols.csv --column Name --profile marisa
 ```
 
-Those runs assume the datasets have already been downloaded to `/tmp/StockETFList` and `/tmp/CUSIP.csv`.
+The Wikipedia rows were produced with:
+
+```sh
+./build-vcpkg/string_bimap_bench \
+  --line-file /tmp/enwiki-latest-all-titles-in-ns0.keys.txt \
+  --profile compact \
+  --prefix A \
+  --phases insert,find,get,erase,compact,save \
+  --release-inputs-before-compact \
+  --serialized-file /tmp/string_bimap_enwiki_xcdat.bin \
+  --save-compacted \
+  --shuffle \
+  --seed 7
+
+./build-vcpkg/string_bimap_bench \
+  --line-file /tmp/enwiki-latest-all-titles-in-ns0.keys.txt \
+  --profile marisa \
+  --prefix A \
+  --phases insert,find,get,erase,compact,save \
+  --release-inputs-before-compact \
+  --serialized-file /tmp/string_bimap_enwiki_marisa.bin \
+  --save-compacted \
+  --shuffle \
+  --seed 7
+
+./build-vcpkg/string_bimap_bench \
+  --profile compact \
+  --phases load,find_loaded,get_loaded \
+  --serialized-file /tmp/string_bimap_enwiki_xcdat.bin
+
+./build-vcpkg/string_bimap_bench \
+  --profile marisa \
+  --phases load,find_loaded,get_loaded \
+  --serialized-file /tmp/string_bimap_enwiki_marisa.bin
+```
+
+Those runs assume the datasets have already been downloaded to `/tmp/StockETFList`, `/tmp/CUSIP.csv`, `/tmp/SEC_CIKs_Symbols.csv`, and `/tmp/enwiki-latest-all-titles-in-ns0.keys.txt`.
 
 You can also benchmark a plain text corpus with one key per line:
 
@@ -206,9 +285,10 @@ You can also split serialization and deserialization into separate benchmark run
 
 If `load` is requested without `save` in the same run, `--serialized-file` is required.
 
-For `BackendProfile::CompactMemory`, file-based persistence may create:
+For compact base backends, file-based persistence may create one of:
 
 - `dict.bin.compact.xcdat`
+- `dict.bin.compact.marisa`
 - `dict.bin.compact.ids`
 
 These sidecars store the native compact base and its local-to-global ID map. They are optional accelerators for `load(path)`. Stream `save(std::ostream&)` and `load(std::istream&)` remain logical-only and never use sidecars.

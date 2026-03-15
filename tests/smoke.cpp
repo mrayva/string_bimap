@@ -48,10 +48,23 @@ void expect(bool condition, const char* message) {
     }
 }
 
+[[nodiscard]] std::string compact_sidecar_path(BackendProfile profile, const std::string& path) {
+    switch (profile) {
+        case BackendProfile::CompactMemory:
+            return path + ".compact.xcdat";
+        case BackendProfile::CompactMemoryMarisa:
+            return path + ".compact.marisa";
+        case BackendProfile::FastLookup:
+            return {};
+    }
+    return {};
+}
+
 template <class Fn>
 void for_each_profile(Fn&& fn) {
     fn(BackendProfile::FastLookup);
     fn(BackendProfile::CompactMemory);
+    fn(BackendProfile::CompactMemoryMarisa);
 }
 
 void test_basic_insert_erase_compact(BackendProfile profile) {
@@ -294,63 +307,83 @@ void test_serialization_round_trip_file(BackendProfile profile) {
 }
 
 void test_compact_native_sidecars() {
+#if defined(STRING_BIMAP_HAS_XCDAT) || defined(STRING_BIMAP_HAS_MARISA)
+    auto run = [](BackendProfile profile) {
+        StringBimap dict(0, profile);
+        const auto alpha = dict.insert("alpha");
+        const auto beta = dict.insert("beta");
+        dict.compact();
+
+        const std::string path = "/tmp/string_bimap_compact_native.bin";
+        const std::string trie_path = compact_sidecar_path(profile, path);
+        const std::string ids_path = path + ".compact.ids";
+        std::filesystem::remove(path);
+        std::filesystem::remove(path + ".compact.xcdat");
+        std::filesystem::remove(path + ".compact.marisa");
+        std::filesystem::remove(ids_path);
+
+        dict.save(path);
+
+        expect(std::filesystem::exists(trie_path), "compact trie sidecar should be written");
+        expect(std::filesystem::exists(ids_path), "compact id sidecar should be written");
+
+        auto restored = StringBimap::load(path);
+        expect(restored.find_id("alpha").value() == alpha, "native compact load should preserve alpha");
+        expect(restored.find_id("beta").value() == beta, "native compact load should preserve beta");
+
+        std::filesystem::remove(path);
+        std::filesystem::remove(path + ".compact.xcdat");
+        std::filesystem::remove(path + ".compact.marisa");
+        std::filesystem::remove(ids_path);
+    };
 #if defined(STRING_BIMAP_HAS_XCDAT)
-    StringBimap dict(0, BackendProfile::CompactMemory);
-    const auto alpha = dict.insert("alpha");
-    const auto beta = dict.insert("beta");
-    dict.compact();
-
-    const std::string path = "/tmp/string_bimap_compact_native.bin";
-    const std::string trie_path = path + ".compact.xcdat";
-    const std::string ids_path = path + ".compact.ids";
-    std::filesystem::remove(path);
-    std::filesystem::remove(trie_path);
-    std::filesystem::remove(ids_path);
-
-    dict.save(path);
-
-    expect(std::filesystem::exists(trie_path), "compact trie sidecar should be written");
-    expect(std::filesystem::exists(ids_path), "compact id sidecar should be written");
-
-    auto restored = StringBimap::load(path);
-    expect(restored.find_id("alpha").value() == alpha, "native compact load should preserve alpha");
-    expect(restored.find_id("beta").value() == beta, "native compact load should preserve beta");
-
-    std::filesystem::remove(path);
-    std::filesystem::remove(trie_path);
-    std::filesystem::remove(ids_path);
+    run(BackendProfile::CompactMemory);
+#endif
+#if defined(STRING_BIMAP_HAS_MARISA)
+    run(BackendProfile::CompactMemoryMarisa);
+#endif
 #endif
 }
 
 void test_save_compacted_preserves_ids_and_sidecars() {
+#if defined(STRING_BIMAP_HAS_XCDAT) || defined(STRING_BIMAP_HAS_MARISA)
+    auto run = [](BackendProfile profile) {
+        StringBimap dict(0, profile);
+        const auto alpha = dict.insert("alpha");
+        const auto beta = dict.insert("beta");
+        expect(dict.erase(beta), "beta erase before save_compacted should succeed");
+        const auto gamma = dict.insert("gamma");
+
+        const std::string path = "/tmp/string_bimap_save_compacted.bin";
+        const std::string trie_path = compact_sidecar_path(profile, path);
+        const std::string ids_path = path + ".compact.ids";
+        std::filesystem::remove(path);
+        std::filesystem::remove(path + ".compact.xcdat");
+        std::filesystem::remove(path + ".compact.marisa");
+        std::filesystem::remove(ids_path);
+
+        dict.save_compacted(path);
+
+        expect(std::filesystem::exists(trie_path), "save_compacted should emit compact trie sidecar");
+        expect(std::filesystem::exists(ids_path), "save_compacted should emit compact id sidecar");
+
+        auto restored = StringBimap::load(path);
+        expect(restored.find_id("alpha").value() == alpha, "save_compacted should preserve alpha id");
+        expect(restored.find_id("gamma").value() == gamma, "save_compacted should preserve gamma id");
+        expect(!restored.contains("beta"), "save_compacted should preserve deleted beta");
+        expect(!restored.contains_id(beta), "save_compacted should preserve deleted beta hole");
+
+        std::filesystem::remove(path);
+        std::filesystem::remove(path + ".compact.xcdat");
+        std::filesystem::remove(path + ".compact.marisa");
+        std::filesystem::remove(ids_path);
+    };
 #if defined(STRING_BIMAP_HAS_XCDAT)
-    StringBimap dict(0, BackendProfile::CompactMemory);
-    const auto alpha = dict.insert("alpha");
-    const auto beta = dict.insert("beta");
-    expect(dict.erase(beta), "beta erase before save_compacted should succeed");
-    const auto gamma = dict.insert("gamma");
-
-    const std::string path = "/tmp/string_bimap_save_compacted.bin";
-    const std::string trie_path = path + ".compact.xcdat";
-    const std::string ids_path = path + ".compact.ids";
-    std::filesystem::remove(path);
-    std::filesystem::remove(trie_path);
-    std::filesystem::remove(ids_path);
-
-    dict.save_compacted(path);
-
-    expect(std::filesystem::exists(trie_path), "save_compacted should emit compact trie sidecar");
-    expect(std::filesystem::exists(ids_path), "save_compacted should emit compact id sidecar");
-
-    auto restored = StringBimap::load(path);
-    expect(restored.find_id("alpha").value() == alpha, "save_compacted should preserve alpha id");
-    expect(restored.find_id("gamma").value() == gamma, "save_compacted should preserve gamma id");
-    expect(!restored.contains("beta"), "save_compacted should preserve deleted beta");
-    expect(!restored.contains_id(beta), "save_compacted should preserve deleted beta hole");
-
-    std::filesystem::remove(path);
-    std::filesystem::remove(trie_path);
-    std::filesystem::remove(ids_path);
+    run(BackendProfile::CompactMemory);
+#endif
+#if defined(STRING_BIMAP_HAS_MARISA)
+    run(BackendProfile::CompactMemoryMarisa);
+#endif
 #endif
 }
 
@@ -463,6 +496,9 @@ void test_backend_profile_explicit_selection() {
 
     StringBimap compact(0, BackendProfile::CompactMemory);
     expect(compact.backend_profile() == BackendProfile::CompactMemory, "compact profile should be selectable");
+
+    StringBimap marisa(0, BackendProfile::CompactMemoryMarisa);
+    expect(marisa.backend_profile() == BackendProfile::CompactMemoryMarisa, "marisa profile should be selectable");
 }
 
 }  // namespace

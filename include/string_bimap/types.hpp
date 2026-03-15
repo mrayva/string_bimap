@@ -14,6 +14,7 @@ inline constexpr StringId kInvalidId = std::numeric_limits<StringId>::max();
 enum class BackendProfile : std::uint8_t {
     FastLookup = 0,
     CompactMemory = 1,
+    CompactMemoryMarisa = 2,
 };
 
 struct LookupResult {

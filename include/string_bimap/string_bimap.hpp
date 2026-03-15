@@ -213,15 +213,14 @@ public:
         }
         save(out);
 
-#if defined(STRING_BIMAP_HAS_XCDAT)
-        const auto trie_path = detail::compact_trie_sidecar_path(path);
-        const auto ids_path = detail::compact_ids_sidecar_path(path);
+#if defined(STRING_BIMAP_HAS_XCDAT) || defined(STRING_BIMAP_HAS_MARISA)
         if (base_.has_native_compact_index() && delta_.size() == 0 && tombstones_.empty()) {
-            base_.save_native_compact_index(trie_path, ids_path);
+            base_.save_native_compact_index(path);
         } else {
             std::error_code ec;
-            std::filesystem::remove(trie_path, ec);
-            std::filesystem::remove(ids_path, ec);
+            std::filesystem::remove(detail::compact_trie_sidecar_path(path), ec);
+            std::filesystem::remove(detail::compact_marisa_sidecar_path(path), ec);
+            std::filesystem::remove(detail::compact_ids_sidecar_path(path), ec);
         }
 #endif
     }
@@ -320,19 +319,24 @@ public:
             items.push_back(BaseSegment::BuildItem{id, value});
         }
 
-#if defined(STRING_BIMAP_HAS_XCDAT)
+#if defined(STRING_BIMAP_HAS_XCDAT) || defined(STRING_BIMAP_HAS_MARISA)
         bool loaded_native_compact = false;
-        const auto trie_path = detail::compact_trie_sidecar_path(path);
-        const auto ids_path = detail::compact_ids_sidecar_path(path);
-        if (profile == BackendProfile::CompactMemory) {
-            if (std::filesystem::exists(trie_path) && std::filesystem::exists(ids_path)) {
-                loaded_native_compact = dict.base_.load_native_compact_index(std::move(items), trie_path, ids_path);
-            }
+        const bool has_xcdat_sidecars =
+            std::filesystem::exists(detail::compact_trie_sidecar_path(path)) &&
+            std::filesystem::exists(detail::compact_ids_sidecar_path(path));
+        const bool has_marisa_sidecars =
+            std::filesystem::exists(detail::compact_marisa_sidecar_path(path)) &&
+            std::filesystem::exists(detail::compact_ids_sidecar_path(path));
+        if ((profile == BackendProfile::CompactMemory && has_xcdat_sidecars) ||
+            (profile == BackendProfile::CompactMemoryMarisa && has_marisa_sidecars)) {
+            loaded_native_compact = dict.base_.load_native_compact_index(std::move(items), path);
         }
         if (!loaded_native_compact) {
             dict.base_.rebuild(std::move(items));
-            if (profile == BackendProfile::CompactMemory && dict.base_.has_native_compact_index()) {
-                dict.base_.save_native_compact_index(trie_path, ids_path);
+            if ((profile == BackendProfile::CompactMemory ||
+                 profile == BackendProfile::CompactMemoryMarisa) &&
+                dict.base_.has_native_compact_index()) {
+                dict.base_.save_native_compact_index(path);
             }
         }
 #else

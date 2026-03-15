@@ -207,7 +207,7 @@ private:
 
     [[nodiscard]] bool use_compact_index() const noexcept {
 #if defined(STRING_BIMAP_HAS_HAT_TRIE)
-        return profile_ == BackendProfile::CompactMemory;
+        return profile_ != BackendProfile::FastLookup;
 #else
         return false;
 #endif

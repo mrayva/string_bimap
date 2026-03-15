@@ -17,6 +17,9 @@
 #if defined(STRING_BIMAP_HAS_XCDAT)
 #include <xcdat.hpp>
 #endif
+#if defined(STRING_BIMAP_HAS_MARISA)
+#include <marisa.h>
+#endif
 
 namespace string_bimap {
 
@@ -36,12 +39,22 @@ public:
 
     [[nodiscard]] std::optional<StringId> find_id(std::string_view value) const {
 #if defined(STRING_BIMAP_HAS_XCDAT)
-        if (use_compact_index()) {
+        if (use_xcdat_index()) {
             const auto local = trie_->lookup(value);
             if (!local.has_value()) {
                 return std::nullopt;
             }
             return local_to_global_[static_cast<std::size_t>(*local)];
+        }
+#endif
+#if defined(STRING_BIMAP_HAS_MARISA)
+        if (use_marisa_index()) {
+            marisa::Agent agent;
+            agent.set_query(value);
+            if (!marisa_trie_.lookup(agent)) {
+                return std::nullopt;
+            }
+            return local_to_global_[agent.key().id()];
         }
 #endif
         const auto it = detail::map_find(fallback_index_, value);
@@ -77,61 +90,104 @@ public:
             usage.compact_index_bytes += static_cast<std::size_t>(xcdat::memory_in_bytes(*trie_));
         }
 #endif
+#if defined(STRING_BIMAP_HAS_MARISA)
+        if (use_marisa_index()) {
+            usage.compact_index_bytes += local_to_global_.capacity() * sizeof(StringId);
+            usage.compact_index_bytes += marisa_trie_.total_size();
+        }
+#endif
         return usage;
     }
 
     [[nodiscard]] bool has_native_compact_index() const noexcept {
 #if defined(STRING_BIMAP_HAS_XCDAT)
-        return profile_ == BackendProfile::CompactMemory && trie_.has_value();
+        if (profile_ == BackendProfile::CompactMemory && trie_.has_value()) {
+            return true;
+        }
+#endif
+#if defined(STRING_BIMAP_HAS_MARISA)
+        if (profile_ == BackendProfile::CompactMemoryMarisa && marisa_ready_) {
+            return true;
+        }
+#endif
+#if !defined(STRING_BIMAP_HAS_XCDAT) && !defined(STRING_BIMAP_HAS_MARISA)
+        return false;
 #else
         return false;
 #endif
     }
 
-    void save_native_compact_index(const std::string& trie_path, const std::string& ids_path) const {
+    void save_native_compact_index(const std::string& path) const {
 #if defined(STRING_BIMAP_HAS_XCDAT)
-        if (!has_native_compact_index()) {
-            throw std::runtime_error("compact trie index is not available");
+        if (use_xcdat_index()) {
+            xcdat::save(*trie_, detail::compact_trie_sidecar_path(path));
+            detail::write_vector_file(detail::compact_ids_sidecar_path(path), local_to_global_);
+            return;
         }
-        xcdat::save(*trie_, trie_path);
-        detail::write_vector_file(ids_path, local_to_global_);
+#endif
+#if defined(STRING_BIMAP_HAS_MARISA)
+        if (use_marisa_index()) {
+            marisa_trie_.save(detail::compact_marisa_sidecar_path(path).c_str());
+            detail::write_vector_file(detail::compact_ids_sidecar_path(path), local_to_global_);
+            return;
+        }
+#endif
+#if defined(STRING_BIMAP_HAS_XCDAT) || defined(STRING_BIMAP_HAS_MARISA)
+        throw std::runtime_error("compact trie index is not available");
 #else
-        (void)trie_path;
-        (void)ids_path;
-        throw std::runtime_error("compact trie index serialization requires xcdat");
+        throw std::runtime_error("compact trie index serialization requires an optional compact backend");
 #endif
     }
 
-    [[nodiscard]] bool load_native_compact_index(std::vector<BuildItem> items,
-                                                 const std::string& trie_path,
-                                                 const std::string& ids_path) {
+    [[nodiscard]] bool load_native_compact_index(std::vector<BuildItem> items, const std::string& path) {
 #if defined(STRING_BIMAP_HAS_XCDAT)
-        try {
-            rebuild_storage(items);
-            fallback_index_.clear();
-            trie_ = xcdat::load<TrieType>(trie_path);
-            local_to_global_ = detail::read_vector_file<StringId>(ids_path);
-            if (!trie_.has_value() || local_to_global_.size() != trie_->num_keys()) {
-                throw std::runtime_error("compact trie sidecar size mismatch");
+        if (profile_ == BackendProfile::CompactMemory) {
+            try {
+                rebuild_storage(items);
+                fallback_index_.clear();
+                trie_ = xcdat::load<TrieType>(detail::compact_trie_sidecar_path(path));
+                local_to_global_ = detail::read_vector_file<StringId>(detail::compact_ids_sidecar_path(path));
+                if (!trie_.has_value() || local_to_global_.size() != trie_->num_keys()) {
+                    throw std::runtime_error("compact trie sidecar size mismatch");
+                }
+                return true;
+            } catch (...) {
+                trie_.reset();
+                local_to_global_.clear();
+                return false;
             }
-            return true;
-        } catch (...) {
-            trie_.reset();
-            local_to_global_.clear();
-            return false;
         }
 #else
         (void)items;
-        (void)trie_path;
-        (void)ids_path;
-        return false;
 #endif
+#if defined(STRING_BIMAP_HAS_MARISA)
+        if (profile_ == BackendProfile::CompactMemoryMarisa) {
+            try {
+                rebuild_storage(items);
+                fallback_index_.clear();
+                marisa_trie_.load(detail::compact_marisa_sidecar_path(path).c_str());
+                local_to_global_ = detail::read_vector_file<StringId>(detail::compact_ids_sidecar_path(path));
+                if (local_to_global_.size() != marisa_trie_.num_keys()) {
+                    throw std::runtime_error("compact marisa sidecar size mismatch");
+                }
+                marisa_ready_ = true;
+                return true;
+            } catch (...) {
+                marisa_trie_.clear();
+                local_to_global_.clear();
+                marisa_ready_ = false;
+                return false;
+            }
+        }
+#endif
+        (void)path;
+        return false;
     }
 
     template <class Func>
     void for_each_with_prefix(std::string_view prefix, Func&& func) const {
 #if defined(STRING_BIMAP_HAS_XCDAT)
-        if (use_compact_index()) {
+        if (use_xcdat_index()) {
             std::vector<StringId> ids;
             trie_->predictive_search(prefix, [&](std::uint64_t local_id, std::string_view) {
                 const auto id = local_to_global_[static_cast<std::size_t>(local_id)];
@@ -139,6 +195,24 @@ public:
                     ids.push_back(id);
                 }
             });
+            std::sort(ids.begin(), ids.end());
+            for (const auto id : ids) {
+                func(id, get_string(id));
+            }
+            return;
+        }
+#endif
+#if defined(STRING_BIMAP_HAS_MARISA)
+        if (use_marisa_index()) {
+            std::vector<StringId> ids;
+            marisa::Agent agent;
+            agent.set_query(prefix);
+            while (marisa_trie_.predictive_search(agent)) {
+                const auto id = local_to_global_[agent.key().id()];
+                if (id != kInvalidId) {
+                    ids.push_back(id);
+                }
+            }
             std::sort(ids.begin(), ids.end());
             for (const auto id : ids) {
                 func(id, get_string(id));
@@ -160,13 +234,26 @@ public:
     template <class Func>
     void for_each_with_prefix_unordered(std::string_view prefix, Func&& func) const {
 #if defined(STRING_BIMAP_HAS_XCDAT)
-        if (use_compact_index()) {
+        if (use_xcdat_index()) {
             trie_->predictive_search(prefix, [&](std::uint64_t local_id, std::string_view) {
                 const auto id = local_to_global_[static_cast<std::size_t>(local_id)];
                 if (id != kInvalidId) {
                     func(id, get_string(id));
                 }
             });
+            return;
+        }
+#endif
+#if defined(STRING_BIMAP_HAS_MARISA)
+        if (use_marisa_index()) {
+            marisa::Agent agent;
+            agent.set_query(prefix);
+            while (marisa_trie_.predictive_search(agent)) {
+                const auto id = local_to_global_[agent.key().id()];
+                if (id != kInvalidId) {
+                    func(id, get_string(id));
+                }
+            }
             return;
         }
 #endif
@@ -208,9 +295,17 @@ private:
             ++live_size_;
         }
     }
-    [[nodiscard]] bool use_compact_index() const noexcept {
+    [[nodiscard]] bool use_xcdat_index() const noexcept {
 #if defined(STRING_BIMAP_HAS_XCDAT)
         return profile_ == BackendProfile::CompactMemory && trie_.has_value();
+#else
+        return false;
+#endif
+    }
+
+    [[nodiscard]] bool use_marisa_index() const noexcept {
+#if defined(STRING_BIMAP_HAS_MARISA)
+        return profile_ == BackendProfile::CompactMemoryMarisa && marisa_ready_;
 #else
         return false;
 #endif
@@ -259,6 +354,29 @@ private:
             local_to_global_.clear();
         }
 #endif
+#if defined(STRING_BIMAP_HAS_MARISA)
+        marisa_trie_.clear();
+        marisa_ready_ = false;
+        if (profile_ == BackendProfile::CompactMemoryMarisa) {
+            marisa::Keyset keyset;
+            for (const auto& key : keys) {
+                keyset.push_back(key);
+            }
+            marisa_trie_.build(keyset);
+            marisa_ready_ = true;
+            local_to_global_.assign(marisa_trie_.num_keys(), kInvalidId);
+            marisa::Agent agent;
+            for (std::size_t local_id = 0; local_id < marisa_trie_.num_keys(); ++local_id) {
+                agent.set_query(local_id);
+                marisa_trie_.reverse_lookup(agent);
+                const auto global = detail::map_find(fallback_index_, agent.key().str());
+                if (global != fallback_index_.end()) {
+                    local_to_global_[local_id] = detail::map_value(global);
+                }
+            }
+            release_fallback_index();
+        }
+#endif
     }
 
     PackedStringArena arena_;
@@ -270,8 +388,12 @@ private:
 #if defined(STRING_BIMAP_HAS_XCDAT)
     using TrieType = xcdat::trie_8_type;
     std::optional<TrieType> trie_;
-    std::vector<StringId> local_to_global_;
 #endif
+#if defined(STRING_BIMAP_HAS_MARISA)
+    marisa::Trie marisa_trie_;
+    bool marisa_ready_ = false;
+#endif
+    std::vector<StringId> local_to_global_;
 };
 
 }  // namespace string_bimap

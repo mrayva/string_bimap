@@ -65,6 +65,8 @@ struct Config {
             return "fast";
         case BackendProfile::CompactMemory:
             return "compact";
+        case BackendProfile::CompactMemoryMarisa:
+            return "marisa";
     }
     return "unknown";
 }
@@ -127,6 +129,8 @@ struct Config {
                 cfg.profile = BackendProfile::FastLookup;
             } else if (value == "compact") {
                 cfg.profile = BackendProfile::CompactMemory;
+            } else if (value == "marisa") {
+                cfg.profile = BackendProfile::CompactMemoryMarisa;
             } else {
                 throw std::invalid_argument("invalid profile: " + std::string(value));
             }
@@ -514,8 +518,12 @@ int main(int argc, char** argv) {
                   << " shuffle=" << (cfg.shuffle ? "true" : "false")
                   << " unique_keys=" << keys.size() << '\n';
     }
-#if defined(STRING_BIMAP_HAS_XCDAT)
+#if defined(STRING_BIMAP_HAS_XCDAT) && defined(STRING_BIMAP_HAS_MARISA)
+    std::cout << "compiled_static_index=xcdat,marisa\n";
+#elif defined(STRING_BIMAP_HAS_XCDAT)
     std::cout << "compiled_static_index=xcdat\n";
+#elif defined(STRING_BIMAP_HAS_MARISA)
+    std::cout << "compiled_static_index=marisa\n";
 #else
     std::cout << "compiled_static_index=fallback_map\n";
 #endif

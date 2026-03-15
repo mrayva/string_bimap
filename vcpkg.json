@@ -4,6 +4,7 @@
   "description": "Header-only bidirectional string dictionary with a static base and mutable delta overlay.",
   "dependencies": [
     "hat-trie",
+    "marisa-trie",
     "xcdat"
   ]
 }
