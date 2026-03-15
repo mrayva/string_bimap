@@ -158,6 +158,13 @@ Wikipedia titles tell the same story at larger scale. Using `/tmp/enwiki-latest-
 | `enwiki-latest-all-titles-in-ns0` | `compact` | 63.4 s | 28.0 s | 33.4 s | 210.2 s | 187.1 s | 8.95 s | 3975.81 ns/op | 32.28 ns/op | 708 MB |
 | `enwiki-latest-all-titles-in-ns0` | `marisa` | 63.2 s | 29.2 s | 34.9 s | 86.3 s | 72.3 s | 8.91 s | 2144.53 ns/op | 32.25 ns/op | 688 MB |
 
+The Naskitis `distinct_1` text corpus shows a similar tradeoff on a large compacted dictionary:
+
+| Corpus | Profile | Insert | Find | Get | Compact | Save | Load-only | Find Loaded | Get Loaded | Internal After Load |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `distinct_1` | `compact` | 73.1 s | 41.1 s | 48.9 s | 232.0 s | 218.1 s | 15.09 s | 2828.26 ns/op | 33.36 ns/op | 830 MB |
+| `distinct_1` | `marisa` | 72.9 s | 40.5 s | 49.3 s | 102.0 s | 93.0 s | 14.99 s | 954.74 ns/op | 33.95 ns/op | 856 MB |
+
 The table above was produced with the dependency-backed benchmark binary:
 
 ```sh
@@ -222,7 +229,37 @@ The Wikipedia rows were produced with:
   --serialized-file /tmp/string_bimap_enwiki_marisa.bin
 ```
 
-Those runs assume the datasets have already been downloaded to `/tmp/StockETFList`, `/tmp/CUSIP.csv`, `/tmp/SEC_CIKs_Symbols.csv`, and `/tmp/enwiki-latest-all-titles-in-ns0.keys.txt`.
+The Naskitis `distinct_1` rows were produced with:
+
+```sh
+./build-vcpkg/string_bimap_bench \
+  --line-file /tmp/naskitis/distinct_1 \
+  --profile compact \
+  --phases insert,find,get,compact,save \
+  --release-inputs-before-compact \
+  --serialized-file /tmp/string_bimap_naskitis_distinct1_xcdat.bin \
+  --save-compacted
+
+./build-vcpkg/string_bimap_bench \
+  --line-file /tmp/naskitis/distinct_1 \
+  --profile marisa \
+  --phases insert,find,get,compact,save \
+  --release-inputs-before-compact \
+  --serialized-file /tmp/string_bimap_naskitis_distinct1_marisa.bin \
+  --save-compacted
+
+./build-vcpkg/string_bimap_bench \
+  --profile compact \
+  --phases load,find_loaded,get_loaded \
+  --serialized-file /tmp/string_bimap_naskitis_distinct1_xcdat.bin
+
+./build-vcpkg/string_bimap_bench \
+  --profile marisa \
+  --phases load,find_loaded,get_loaded \
+  --serialized-file /tmp/string_bimap_naskitis_distinct1_marisa.bin
+```
+
+Those runs assume the datasets have already been downloaded to `/tmp/StockETFList`, `/tmp/CUSIP.csv`, `/tmp/SEC_CIKs_Symbols.csv`, `/tmp/enwiki-latest-all-titles-in-ns0.keys.txt`, and `/tmp/naskitis/distinct_1`.
 
 You can also benchmark a plain text corpus with one key per line:
 
