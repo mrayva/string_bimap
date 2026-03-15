@@ -1,0 +1,9 @@
+{
+  "name": "string-bimap",
+  "version-string": "0.1.0",
+  "description": "Header-only bidirectional string dictionary with a static base and mutable delta overlay.",
+  "dependencies": [
+    "hat-trie",
+    "xcdat"
+  ]
+}
