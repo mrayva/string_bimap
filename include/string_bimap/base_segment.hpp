@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstddef>
 #include <fstream>
@@ -182,6 +183,183 @@ public:
         return false;
     }
 
+    void save_native_storage(const std::string& path) const {
+        std::ofstream out(detail::native_base_storage_sidecar_path(path), std::ios::binary);
+        if (!out) {
+            throw std::runtime_error("failed to open native base sidecar for writing");
+        }
+
+        detail::write_bytes(out, detail::kNativeStateMagic.data(), detail::kNativeStateMagic.size());
+        detail::write_pod(out, detail::kNativeStateVersion);
+        detail::write_pod(out, static_cast<std::uint64_t>(live_size_));
+        detail::write_pod(out, static_cast<std::uint64_t>(entries_by_id_.size()));
+        if (!entries_by_id_.empty()) {
+            out.write(reinterpret_cast<const char*>(entries_by_id_.data()),
+                      static_cast<std::streamsize>(entries_by_id_.size() * sizeof(EntryLocation)));
+            if (!out) {
+                throw std::runtime_error("failed to write native base entry table");
+            }
+        }
+
+        std::uint8_t storage_kind = 0;
+        if (profile_ == BackendProfile::CompactMemoryMarisaFsst) {
+            storage_kind = 1;
+        }
+        detail::write_pod(out, storage_kind);
+
+        if (storage_kind == 0) {
+            const auto& bytes = arena_.bytes();
+            detail::write_pod(out, static_cast<std::uint64_t>(bytes.size()));
+            if (!bytes.empty()) {
+                out.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+                if (!out) {
+                    throw std::runtime_error("failed to write native base arena payload");
+                }
+            }
+            return;
+        }
+
+#if defined(STRING_BIMAP_HAS_FSST)
+        detail::write_pod(out, static_cast<std::uint64_t>(fsst_payload_.size()));
+        if (!fsst_payload_.empty()) {
+            out.write(fsst_payload_.data(), static_cast<std::streamsize>(fsst_payload_.size()));
+            if (!out) {
+                throw std::runtime_error("failed to write native base fsst payload");
+            }
+        }
+        detail::write_pod(out, static_cast<std::uint64_t>(fsst_uncompressed_lengths_.size()));
+        if (!fsst_uncompressed_lengths_.empty()) {
+            out.write(reinterpret_cast<const char*>(fsst_uncompressed_lengths_.data()),
+                      static_cast<std::streamsize>(fsst_uncompressed_lengths_.size() * sizeof(std::uint32_t)));
+            if (!out) {
+                throw std::runtime_error("failed to write native base fsst lengths");
+            }
+        }
+        detail::write_pod(out, static_cast<std::uint64_t>(fsst_decoder_header_.size()));
+        if (!fsst_decoder_header_.empty()) {
+            out.write(reinterpret_cast<const char*>(fsst_decoder_header_.data()),
+                      static_cast<std::streamsize>(fsst_decoder_header_.size()));
+            if (!out) {
+                throw std::runtime_error("failed to write native base fsst decoder header");
+            }
+        }
+#else
+        throw std::runtime_error("native base FSST storage requires FSST support");
+#endif
+    }
+
+    [[nodiscard]] bool load_native_storage(const std::string& path) {
+        try {
+            std::ifstream in(detail::native_base_storage_sidecar_path(path), std::ios::binary);
+            if (!in) {
+                return false;
+            }
+
+            std::array<char, detail::kNativeStateMagic.size()> magic{};
+            in.read(magic.data(), static_cast<std::streamsize>(magic.size()));
+            if (!in || magic != detail::kNativeStateMagic) {
+                throw std::runtime_error("invalid native base sidecar header");
+            }
+
+            const auto version = detail::read_pod<std::uint32_t>(in);
+            if (version != detail::kNativeStateVersion) {
+                throw std::runtime_error("unsupported native base sidecar version");
+            }
+
+            const auto expected_live_size = detail::read_pod<std::uint64_t>(in);
+            const auto entry_count = detail::read_pod<std::uint64_t>(in);
+            std::vector<EntryLocation> entries(static_cast<std::size_t>(entry_count));
+            if (!entries.empty()) {
+                in.read(reinterpret_cast<char*>(entries.data()),
+                        static_cast<std::streamsize>(entries.size() * sizeof(EntryLocation)));
+                if (!in) {
+                    throw std::runtime_error("failed to read native base entry table");
+                }
+            }
+
+            const auto storage_kind = detail::read_pod<std::uint8_t>(in);
+            entries_by_id_ = std::move(entries);
+            live_size_ = static_cast<std::size_t>(expected_live_size);
+            release_fallback_index();
+#if defined(STRING_BIMAP_HAS_XCDAT)
+            trie_.reset();
+#endif
+#if defined(STRING_BIMAP_HAS_MARISA)
+            marisa_trie_.clear();
+            marisa_ready_ = false;
+#endif
+#if defined(STRING_BIMAP_HAS_KEYVI)
+            release_keyvi_sidecar();
+#endif
+            fst_map_.reset();
+            fst_bytecode_.clear();
+            local_to_global_.clear();
+
+            if (storage_kind == 0) {
+                const auto arena_size = detail::read_pod<std::uint64_t>(in);
+                std::vector<char> bytes(static_cast<std::size_t>(arena_size));
+                if (!bytes.empty()) {
+                    in.read(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+                    if (!in) {
+                        throw std::runtime_error("failed to read native base arena payload");
+                    }
+                }
+                arena_.restore_bytes(std::move(bytes));
+#if defined(STRING_BIMAP_HAS_FSST)
+                fsst_payload_.clear();
+                fsst_uncompressed_lengths_.clear();
+                fsst_decoder_header_.clear();
+                fsst_cache_.clear();
+                fsst_decoder_ = {};
+                fsst_ready_ = false;
+#endif
+                return true;
+            }
+
+#if defined(STRING_BIMAP_HAS_FSST)
+            arena_.clear();
+            const auto payload_size = detail::read_pod<std::uint64_t>(in);
+            fsst_payload_.resize(static_cast<std::size_t>(payload_size));
+            if (!fsst_payload_.empty()) {
+                in.read(fsst_payload_.data(), static_cast<std::streamsize>(fsst_payload_.size()));
+                if (!in) {
+                    throw std::runtime_error("failed to read native base fsst payload");
+                }
+            }
+            const auto lengths_count = detail::read_pod<std::uint64_t>(in);
+            fsst_uncompressed_lengths_.resize(static_cast<std::size_t>(lengths_count));
+            if (!fsst_uncompressed_lengths_.empty()) {
+                in.read(reinterpret_cast<char*>(fsst_uncompressed_lengths_.data()),
+                        static_cast<std::streamsize>(fsst_uncompressed_lengths_.size() * sizeof(std::uint32_t)));
+                if (!in) {
+                    throw std::runtime_error("failed to read native base fsst lengths");
+                }
+            }
+            const auto header_size = detail::read_pod<std::uint64_t>(in);
+            fsst_decoder_header_.resize(static_cast<std::size_t>(header_size));
+            if (!fsst_decoder_header_.empty()) {
+                in.read(reinterpret_cast<char*>(fsst_decoder_header_.data()),
+                        static_cast<std::streamsize>(fsst_decoder_header_.size()));
+                if (!in) {
+                    throw std::runtime_error("failed to read native base fsst decoder header");
+                }
+            }
+            fsst_cache_.assign(entries_by_id_.size(), std::string());
+            fsst_decoder_ = {};
+            fsst_ready_ =
+                !fsst_decoder_header_.empty() &&
+                duckdb_fsst_import(&fsst_decoder_,
+                                   reinterpret_cast<unsigned char*>(fsst_decoder_header_.data())) != 0;
+            return fsst_ready_;
+#else
+            throw std::runtime_error("native base FSST storage requires FSST support");
+#endif
+        } catch (...) {
+            clear_storage();
+            return false;
+        }
+    }
+
     void save_native_compact_index(const std::string& path) const {
 #if defined(STRING_BIMAP_HAS_XCDAT)
         if (use_xcdat_index()) {
@@ -305,6 +483,97 @@ public:
         }
         (void)path;
         return false;
+    }
+
+    [[nodiscard]] bool load_native_compact_index_from_storage(const std::string& path) {
+#if defined(STRING_BIMAP_HAS_XCDAT)
+        if (profile_ == BackendProfile::CompactMemory) {
+            try {
+                release_fallback_index();
+                trie_ = xcdat::load<TrieType>(detail::compact_trie_sidecar_path(path));
+                local_to_global_ = detail::read_vector_file<StringId>(detail::compact_ids_sidecar_path(path));
+                if (!trie_.has_value() || local_to_global_.size() != trie_->num_keys()) {
+                    throw std::runtime_error("compact trie sidecar size mismatch");
+                }
+                return true;
+            } catch (...) {
+                trie_.reset();
+                local_to_global_.clear();
+                return false;
+            }
+        }
+#endif
+#if defined(STRING_BIMAP_HAS_MARISA)
+        if (profile_ == BackendProfile::CompactMemoryMarisa ||
+            profile_ == BackendProfile::CompactMemoryMarisaArrayMap ||
+            profile_ == BackendProfile::CompactMemoryMarisaFsst) {
+            try {
+                release_fallback_index();
+                marisa_trie_.load(detail::compact_marisa_sidecar_path(path).c_str());
+                local_to_global_ = detail::read_vector_file<StringId>(detail::compact_ids_sidecar_path(path));
+                if (local_to_global_.size() != marisa_trie_.num_keys()) {
+                    throw std::runtime_error("compact marisa sidecar size mismatch");
+                }
+                marisa_ready_ = true;
+                return true;
+            } catch (...) {
+                marisa_trie_.clear();
+                local_to_global_.clear();
+                marisa_ready_ = false;
+                return false;
+            }
+        }
+#endif
+#if defined(STRING_BIMAP_HAS_KEYVI)
+        if (profile_ == BackendProfile::CompactMemoryKeyvi) {
+            try {
+                release_fallback_index();
+                release_keyvi_sidecar();
+                keyvi_sidecar_path_ = detail::compact_keyvi_sidecar_path(path);
+                keyvi_dictionary_ = std::make_unique<keyvi::dictionary::Dictionary>(keyvi_sidecar_path_);
+                keyvi_sidecar_size_bytes_ = file_size_or_zero(keyvi_sidecar_path_);
+                keyvi_owns_sidecar_ = false;
+                return true;
+            } catch (...) {
+                keyvi_dictionary_.reset();
+                keyvi_sidecar_path_.clear();
+                keyvi_sidecar_size_bytes_ = 0;
+                keyvi_owns_sidecar_ = false;
+                return false;
+            }
+        }
+#endif
+        if (profile_ == BackendProfile::CompactMemoryFst) {
+            try {
+                release_fallback_index();
+                std::ifstream in(detail::compact_fst_sidecar_path(path), std::ios::binary);
+                if (!in) {
+                    throw std::runtime_error("failed to open fst sidecar");
+                }
+                fst_bytecode_.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+                fst_map_ = std::make_unique<FstMapType>(fst_bytecode_);
+                if (!*fst_map_) {
+                    throw std::runtime_error("failed to load fst sidecar");
+                }
+                return true;
+            } catch (...) {
+                fst_map_.reset();
+                fst_bytecode_.clear();
+                return false;
+            }
+        }
+        return false;
+    }
+
+    void rebuild_lookup_from_storage() {
+        release_fallback_index();
+        detail::map_reserve(fallback_index_, live_size_);
+        for (StringId id = 0; id < entries_by_id_.size(); ++id) {
+            if (!entries_by_id_[id].live()) {
+                continue;
+            }
+            detail::map_insert_or_assign(fallback_index_, get_string(id), id);
+        }
     }
 
     template <class Func>
@@ -439,6 +708,20 @@ private:
     void release_fallback_index() {
         detail::StringIdMap empty;
         fallback_index_.swap(empty);
+    }
+
+    void clear_storage() {
+        arena_.clear();
+        entries_by_id_.clear();
+        live_size_ = 0;
+#if defined(STRING_BIMAP_HAS_FSST)
+        fsst_payload_.clear();
+        fsst_uncompressed_lengths_.clear();
+        fsst_decoder_header_.clear();
+        fsst_cache_.clear();
+        fsst_decoder_ = {};
+        fsst_ready_ = false;
+#endif
     }
 
     void rebuild_storage(std::vector<BuildItem>& items) {

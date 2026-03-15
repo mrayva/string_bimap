@@ -54,6 +54,17 @@ public:
         return bytes_.capacity();
     }
 
+    [[nodiscard]] const std::vector<char>& bytes() const noexcept {
+        return bytes_;
+    }
+
+    void restore_bytes(std::vector<char> bytes) {
+        if (bytes.empty() || bytes.front() != '\0') {
+            throw std::runtime_error("packed string arena payload is missing the sentinel byte");
+        }
+        bytes_ = std::move(bytes);
+    }
+
     void clear(std::size_t reserve_bytes = 0) {
         bytes_.clear();
         bytes_.reserve(reserve_bytes + 1);

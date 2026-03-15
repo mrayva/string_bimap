@@ -56,6 +56,14 @@ public:
         return sizeof(*this) + words_.capacity() * sizeof(std::uint64_t);
     }
 
+    [[nodiscard]] const std::vector<std::uint64_t>& words() const noexcept {
+        return words_;
+    }
+
+    void restore_words(std::vector<std::uint64_t> words) {
+        words_ = std::move(words);
+    }
+
 private:
     std::vector<std::uint64_t> words_;
 };

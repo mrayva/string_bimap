@@ -38,6 +38,11 @@ public:
                          BackendProfile profile = BackendProfile::FastLookup)
         : base_(profile), delta_(delta_reserve_bytes, profile), profile_(profile) {}
 
+    StringBimap(const StringBimap&) = delete;
+    StringBimap& operator=(const StringBimap&) = delete;
+    StringBimap(StringBimap&&) noexcept = default;
+    StringBimap& operator=(StringBimap&&) noexcept = default;
+
     [[nodiscard]] BackendProfile backend_profile() const noexcept {
         return profile_;
     }
@@ -224,15 +229,13 @@ public:
         }
         save(out);
 
-        if (base_.has_native_compact_index() && delta_.size() == 0 && tombstones_.empty()) {
+        if (base_.has_native_compact_index()) {
             base_.save_native_compact_index(path);
         } else {
-            std::error_code ec;
-            std::filesystem::remove(detail::compact_trie_sidecar_path(path), ec);
-            std::filesystem::remove(detail::compact_marisa_sidecar_path(path), ec);
-            std::filesystem::remove(detail::compact_fst_sidecar_path(path), ec);
-            std::filesystem::remove(detail::compact_ids_sidecar_path(path), ec);
+            remove_compact_sidecars(path);
         }
+
+        save_native_snapshot(path);
     }
 
     // Saves a compacted snapshot to path without mutating the original dictionary.
@@ -294,6 +297,10 @@ public:
     }
 
     [[nodiscard]] static StringBimap load(const std::string& path) {
+        if (auto native = try_load_native_snapshot(path)) {
+            return std::move(*native);
+        }
+
         std::ifstream in(path, std::ios::binary);
         if (!in) {
             throw std::runtime_error("failed to open file for dictionary deserialization: " + path);
@@ -387,6 +394,137 @@ public:
     }
 
 private:
+    struct NativeSnapshotHeader {
+        std::array<char, detail::kNativeStateMagic.size()> magic = detail::kNativeStateMagic;
+        std::uint32_t version = detail::kNativeStateVersion;
+        StringId next_id = 0;
+        BackendProfile profile = BackendProfile::FastLookup;
+        std::uint64_t live_size = 0;
+        std::uint64_t tombstone_word_count = 0;
+    };
+
+    void save_native_snapshot(const std::string& path) const {
+        try {
+            base_.save_native_storage(path);
+            if (delta_.size() != 0) {
+                delta_.save_native_storage(path);
+            } else {
+                std::error_code ec;
+                std::filesystem::remove(detail::native_delta_storage_sidecar_path(path), ec);
+            }
+
+            std::ofstream out(detail::native_state_sidecar_path(path), std::ios::binary);
+            if (!out) {
+                throw std::runtime_error("failed to open native snapshot metadata for writing");
+            }
+
+            NativeSnapshotHeader header;
+            header.next_id = next_id_;
+            header.profile = profile_;
+            header.live_size = static_cast<std::uint64_t>(live_size_);
+            header.tombstone_word_count =
+                static_cast<std::uint64_t>(tombstones_.words().size());
+
+            detail::write_bytes(out, header.magic.data(), header.magic.size());
+            detail::write_pod(out, header.version);
+            detail::write_pod(out, header.next_id);
+            detail::write_pod(out, header.profile);
+            detail::write_pod(out, header.live_size);
+            detail::write_pod(out, header.tombstone_word_count);
+            if (!tombstones_.words().empty()) {
+                out.write(reinterpret_cast<const char*>(tombstones_.words().data()),
+                          static_cast<std::streamsize>(tombstones_.words().size() * sizeof(std::uint64_t)));
+                if (!out) {
+                    throw std::runtime_error("failed to write native snapshot tombstones");
+                }
+            }
+        } catch (...) {
+            remove_native_snapshot_sidecars(path);
+            throw;
+        }
+    }
+
+    [[nodiscard]] static std::optional<StringBimap> try_load_native_snapshot(const std::string& path) {
+        if (!std::filesystem::exists(detail::native_state_sidecar_path(path)) ||
+            !std::filesystem::exists(detail::native_base_storage_sidecar_path(path))) {
+            return std::nullopt;
+        }
+
+        try {
+            std::ifstream in(detail::native_state_sidecar_path(path), std::ios::binary);
+            if (!in) {
+                return std::nullopt;
+            }
+
+            std::array<char, detail::kNativeStateMagic.size()> magic{};
+            in.read(magic.data(), static_cast<std::streamsize>(magic.size()));
+            if (!in || magic != detail::kNativeStateMagic) {
+                return std::nullopt;
+            }
+
+            const auto version = detail::read_pod<std::uint32_t>(in);
+            if (version != detail::kNativeStateVersion) {
+                return std::nullopt;
+            }
+
+            const auto next_id = detail::read_pod<StringId>(in);
+            const auto profile = detail::read_pod<BackendProfile>(in);
+            const auto live_size = detail::read_pod<std::uint64_t>(in);
+            const auto tombstone_word_count = detail::read_pod<std::uint64_t>(in);
+            std::vector<std::uint64_t> tombstone_words(static_cast<std::size_t>(tombstone_word_count));
+            if (!tombstone_words.empty()) {
+                in.read(reinterpret_cast<char*>(tombstone_words.data()),
+                        static_cast<std::streamsize>(tombstone_words.size() * sizeof(std::uint64_t)));
+                if (!in) {
+                    return std::nullopt;
+                }
+            }
+
+            StringBimap dict(0, profile);
+            dict.next_id_ = next_id;
+            dict.live_size_ = static_cast<std::size_t>(live_size);
+            dict.tombstones_.restore_words(std::move(tombstone_words));
+
+            if (!dict.base_.load_native_storage(path)) {
+                return std::nullopt;
+            }
+
+            const bool loaded_base_lookup =
+                dict.base_.load_native_compact_index_from_storage(path);
+            if (!loaded_base_lookup) {
+                dict.base_.rebuild_lookup_from_storage();
+            }
+
+            if (std::filesystem::exists(detail::native_delta_storage_sidecar_path(path))) {
+                if (!dict.delta_.load_native_storage(path)) {
+                    return std::nullopt;
+                }
+            } else {
+                dict.delta_.clear();
+            }
+
+            return dict;
+        } catch (...) {
+            return std::nullopt;
+        }
+    }
+
+    static void remove_compact_sidecars(const std::string& path) {
+        std::error_code ec;
+        std::filesystem::remove(detail::compact_trie_sidecar_path(path), ec);
+        std::filesystem::remove(detail::compact_marisa_sidecar_path(path), ec);
+        std::filesystem::remove(detail::compact_fst_sidecar_path(path), ec);
+        std::filesystem::remove(detail::compact_keyvi_sidecar_path(path), ec);
+        std::filesystem::remove(detail::compact_ids_sidecar_path(path), ec);
+    }
+
+    static void remove_native_snapshot_sidecars(const std::string& path) {
+        std::error_code ec;
+        std::filesystem::remove(detail::native_state_sidecar_path(path), ec);
+        std::filesystem::remove(detail::native_base_storage_sidecar_path(path), ec);
+        std::filesystem::remove(detail::native_delta_storage_sidecar_path(path), ec);
+    }
+
     BaseSegment base_;
     DeltaSegment delta_;
     Tombstones tombstones_;

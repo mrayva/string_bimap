@@ -49,8 +49,9 @@ If optional dependencies are not compiled in, the compact profiles degrade grace
 - `compact()` preserves all live IDs and only rewrites internal storage.
 - `save()`/`load()` preserve the logical dictionary state, including stable live IDs and deleted holes.
 - `save()`/`load()` preserve the selected backend profile.
-- `save(path)` may emit compact sidecars for `BackendProfile::CompactMemory` when the on-disk snapshot is fully compacted.
-- `load(path)` will use those sidecars when present; otherwise it falls back to logical rebuild and may generate the sidecars for later loads.
+- `save(path)` emits native file sidecars for the current in-memory state, including mixed base+delta snapshots.
+- `load(path)` prefers those native sidecars when present and falls back to logical rebuild otherwise.
+- Stream `save(std::ostream&)` and `load(std::istream&)` remain logical-only and never use sidecars.
 - Empty strings are ignored and never stored.
 
 ## Lifetime And Safety Rules
@@ -484,7 +485,13 @@ For compact base backends, file-based persistence may create one of:
 - `dict.bin.compact.marisa`
 - `dict.bin.compact.ids`
 
-These sidecars store the native compact base and its local-to-global ID map. They are optional accelerators for `load(path)`. Stream `save(std::ostream&)` and `load(std::istream&)` remain logical-only and never use sidecars.
+File-based persistence also emits native snapshot sidecars for the current in-memory state:
+
+- `dict.bin.native.state`
+- `dict.bin.native.base`
+- `dict.bin.native.delta` when the mutable delta is non-empty
+
+The compact sidecars store the native compact lookup index. The native snapshot sidecars store base reverse-storage, mutable delta storage, and tombstones so `load(path)` can restore a mixed base+delta dictionary without replaying the full logical record stream. Stream `save(std::ostream&)` and `load(std::istream&)` remain logical-only and never use sidecars.
 
 If you want a file save to always emit compact sidecars without mutating the original dictionary, use:
 

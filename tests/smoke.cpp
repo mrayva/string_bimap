@@ -48,6 +48,18 @@ void expect(bool condition, const char* message) {
     }
 }
 
+void remove_all_sidecars(const std::string& path) {
+    std::filesystem::remove(path);
+    std::filesystem::remove(path + ".compact.xcdat");
+    std::filesystem::remove(path + ".compact.marisa");
+    std::filesystem::remove(path + ".compact.keyvi");
+    std::filesystem::remove(path + ".compact.fst");
+    std::filesystem::remove(path + ".compact.ids");
+    std::filesystem::remove(path + ".native.state");
+    std::filesystem::remove(path + ".native.base");
+    std::filesystem::remove(path + ".native.delta");
+}
+
 [[nodiscard]] std::string compact_sidecar_path(BackendProfile profile, const std::string& path) {
     switch (profile) {
         case BackendProfile::CompactMemory:
@@ -350,12 +362,7 @@ void test_serialization_round_trip_file(BackendProfile profile) {
     ids.emplace("tail", tail_id);
 
     const std::string path = "/tmp/string_bimap_roundtrip.bin";
-    std::filesystem::remove(path);
-    std::filesystem::remove(path + ".compact.xcdat");
-    std::filesystem::remove(path + ".compact.marisa");
-    std::filesystem::remove(path + ".compact.keyvi");
-    std::filesystem::remove(path + ".compact.fst");
-    std::filesystem::remove(path + ".compact.ids");
+    remove_all_sidecars(path);
     dict.save(path);
     auto restored = StringBimap::load(path);
 
@@ -370,12 +377,7 @@ void test_serialization_round_trip_file(BackendProfile profile) {
         expect(restored.get_string(id) == key, "file round-trip should preserve decoded values");
     }
 
-    std::filesystem::remove(path);
-    std::filesystem::remove(path + ".compact.xcdat");
-    std::filesystem::remove(path + ".compact.marisa");
-    std::filesystem::remove(path + ".compact.keyvi");
-    std::filesystem::remove(path + ".compact.fst");
-    std::filesystem::remove(path + ".compact.ids");
+    remove_all_sidecars(path);
 }
 
 void test_compact_native_sidecars() {
@@ -389,12 +391,7 @@ void test_compact_native_sidecars() {
         const std::string path = "/tmp/string_bimap_compact_native.bin";
         const std::string trie_path = compact_sidecar_path(profile, path);
         const std::string ids_path = path + ".compact.ids";
-        std::filesystem::remove(path);
-        std::filesystem::remove(path + ".compact.xcdat");
-        std::filesystem::remove(path + ".compact.marisa");
-        std::filesystem::remove(path + ".compact.keyvi");
-        std::filesystem::remove(path + ".compact.fst");
-        std::filesystem::remove(ids_path);
+        remove_all_sidecars(path);
 
         dict.save(path);
 
@@ -415,12 +412,7 @@ void test_compact_native_sidecars() {
             expect(id.has_value() && *id == beta, "native compact load should preserve beta");
         }
 
-        std::filesystem::remove(path);
-        std::filesystem::remove(path + ".compact.xcdat");
-        std::filesystem::remove(path + ".compact.marisa");
-        std::filesystem::remove(path + ".compact.keyvi");
-        std::filesystem::remove(path + ".compact.fst");
-        std::filesystem::remove(ids_path);
+        remove_all_sidecars(path);
     };
 #if defined(STRING_BIMAP_HAS_XCDAT)
     run(BackendProfile::CompactMemory);
@@ -447,12 +439,7 @@ void test_save_compacted_preserves_ids_and_sidecars() {
         const std::string path = "/tmp/string_bimap_save_compacted.bin";
         const std::string trie_path = compact_sidecar_path(profile, path);
         const std::string ids_path = path + ".compact.ids";
-        std::filesystem::remove(path);
-        std::filesystem::remove(path + ".compact.xcdat");
-        std::filesystem::remove(path + ".compact.marisa");
-        std::filesystem::remove(path + ".compact.keyvi");
-        std::filesystem::remove(path + ".compact.fst");
-        std::filesystem::remove(ids_path);
+        remove_all_sidecars(path);
 
         dict.save_compacted(path);
 
@@ -475,12 +462,7 @@ void test_save_compacted_preserves_ids_and_sidecars() {
         expect(!restored.contains("beta"), "save_compacted should preserve deleted beta");
         expect(!restored.contains_id(beta), "save_compacted should preserve deleted beta hole");
 
-        std::filesystem::remove(path);
-        std::filesystem::remove(path + ".compact.xcdat");
-        std::filesystem::remove(path + ".compact.marisa");
-        std::filesystem::remove(path + ".compact.keyvi");
-        std::filesystem::remove(path + ".compact.fst");
-        std::filesystem::remove(ids_path);
+        remove_all_sidecars(path);
     };
 #if defined(STRING_BIMAP_HAS_XCDAT)
     run(BackendProfile::CompactMemory);
@@ -493,6 +475,46 @@ void test_save_compacted_preserves_ids_and_sidecars() {
 #endif
     run(BackendProfile::CompactMemoryFst);
 #endif
+}
+
+void test_native_snapshot_round_trip_file(BackendProfile profile) {
+    StringBimap dict(0, profile);
+
+    const auto alpha = dict.insert("alpha");
+    const auto beta = dict.insert("beta");
+    const auto gamma = dict.insert("gamma");
+    dict.compact();
+    expect(dict.erase(beta), "erase after compaction should succeed");
+    const auto delta = dict.insert("delta");
+
+    const std::string path = "/tmp/string_bimap_native_snapshot.bin";
+    remove_all_sidecars(path);
+    dict.save(path);
+
+    expect(std::filesystem::exists(path + ".native.state"), "native state sidecar should be written");
+    expect(std::filesystem::exists(path + ".native.base"), "native base sidecar should be written");
+    expect(std::filesystem::exists(path + ".native.delta"), "native delta sidecar should be written");
+
+    auto restored = StringBimap::load(path);
+    expect(restored.backend_profile() == profile, "native snapshot load should preserve profile");
+    expect(restored.size() == dict.size(), "native snapshot load should preserve next_id");
+    expect(restored.live_size() == dict.live_size(), "native snapshot load should preserve live size");
+    {
+        const auto id = restored.find_id("alpha");
+        expect(id.has_value() && *id == alpha, "native snapshot load should preserve base id");
+    }
+    {
+        const auto id = restored.find_id("gamma");
+        expect(id.has_value() && *id == gamma, "native snapshot load should preserve compacted base id");
+    }
+    {
+        const auto id = restored.find_id("delta");
+        expect(id.has_value() && *id == delta, "native snapshot load should preserve delta id");
+    }
+    expect(!restored.contains("beta"), "native snapshot load should preserve tombstones");
+    expect(!restored.contains_id(beta), "native snapshot load should preserve deleted hole");
+
+    remove_all_sidecars(path);
 }
 
 void test_iteration_api(BackendProfile profile) {
@@ -632,6 +654,7 @@ int main() {
         test_randomized_model(profile);
         test_serialization_round_trip_stream(profile);
         test_serialization_round_trip_file(profile);
+        test_native_snapshot_round_trip_file(profile);
         test_iteration_api(profile);
         test_prefix_query_api(profile);
     });

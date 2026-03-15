@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <istream>
 #include <ostream>
 #include <stdexcept>
@@ -15,6 +16,8 @@ namespace string_bimap::detail {
 
 inline constexpr std::array<char, 8> kFileMagic = {'F', 'S', 'S', 'T', 'P', 'L', 'U', 'S'};
 inline constexpr std::uint32_t kFormatVersion = 2;
+inline constexpr std::array<char, 8> kNativeStateMagic = {'S', 'B', 'N', 'A', 'T', 'I', 'V', 'E'};
+inline constexpr std::uint32_t kNativeStateVersion = 1;
 
 template <class T>
 void write_pod(std::ostream& out, const T& value) {
@@ -74,6 +77,18 @@ inline std::string compact_ids_sidecar_path(const std::string& path) {
     return path + ".compact.ids";
 }
 
+inline std::string native_state_sidecar_path(const std::string& path) {
+    return path + ".native.state";
+}
+
+inline std::string native_base_storage_sidecar_path(const std::string& path) {
+    return path + ".native.base";
+}
+
+inline std::string native_delta_storage_sidecar_path(const std::string& path) {
+    return path + ".native.delta";
+}
+
 template <class T>
 void write_vector_file(const std::string& path, const std::vector<T>& values) {
     static_assert(std::is_trivially_copyable<T>::value, "T must be trivially copyable");
@@ -109,6 +124,37 @@ std::vector<T> read_vector_file(const std::string& path) {
         }
     }
     return values;
+}
+
+inline void write_blob_file(const std::string& path, const std::vector<char>& bytes) {
+    std::ofstream out(path, std::ios::binary);
+    if (!out) {
+        throw std::runtime_error("failed to open blob sidecar for writing: " + path);
+    }
+    const std::uint64_t size = static_cast<std::uint64_t>(bytes.size());
+    write_pod(out, size);
+    if (!bytes.empty()) {
+        out.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+        if (!out) {
+            throw std::runtime_error("failed to write blob sidecar payload: " + path);
+        }
+    }
+}
+
+inline std::vector<char> read_blob_file(const std::string& path) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) {
+        throw std::runtime_error("failed to open blob sidecar for reading: " + path);
+    }
+    const auto size = read_pod<std::uint64_t>(in);
+    std::vector<char> bytes(static_cast<std::size_t>(size));
+    if (!bytes.empty()) {
+        in.read(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+        if (!in) {
+            throw std::runtime_error("failed to read blob sidecar payload: " + path);
+        }
+    }
+    return bytes;
 }
 
 }  // namespace string_bimap::detail

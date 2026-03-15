@@ -1,7 +1,9 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
+#include <fstream>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -10,6 +12,7 @@
 
 #include "detail/string_map.hpp"
 #include "packed_string_arena.hpp"
+#include "serialization.hpp"
 #include "types.hpp"
 
 #if defined(STRING_BIMAP_HAS_HAT_TRIE)
@@ -136,6 +139,83 @@ public:
         return arena_.bytes_used();
     }
 
+    void save_native_storage(const std::string& path) const {
+        std::ofstream out(detail::native_delta_storage_sidecar_path(path), std::ios::binary);
+        if (!out) {
+            throw std::runtime_error("failed to open native delta sidecar for writing");
+        }
+
+        detail::write_bytes(out, detail::kNativeStateMagic.data(), detail::kNativeStateMagic.size());
+        detail::write_pod(out, detail::kNativeStateVersion);
+        detail::write_pod(out, static_cast<std::uint64_t>(live_size_));
+        detail::write_pod(out, static_cast<std::uint64_t>(entries_by_id_.size()));
+        if (!entries_by_id_.empty()) {
+            out.write(reinterpret_cast<const char*>(entries_by_id_.data()),
+                      static_cast<std::streamsize>(entries_by_id_.size() * sizeof(EntryLocation)));
+            if (!out) {
+                throw std::runtime_error("failed to write native delta entry table");
+            }
+        }
+        const auto& bytes = arena_.bytes();
+        detail::write_pod(out, static_cast<std::uint64_t>(bytes.size()));
+        if (!bytes.empty()) {
+            out.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+            if (!out) {
+                throw std::runtime_error("failed to write native delta arena payload");
+            }
+        }
+    }
+
+    [[nodiscard]] bool load_native_storage(const std::string& path) {
+        try {
+            std::ifstream in(detail::native_delta_storage_sidecar_path(path), std::ios::binary);
+            if (!in) {
+                return false;
+            }
+
+            std::array<char, detail::kNativeStateMagic.size()> magic{};
+            in.read(magic.data(), static_cast<std::streamsize>(magic.size()));
+            if (!in || magic != detail::kNativeStateMagic) {
+                throw std::runtime_error("invalid native delta sidecar header");
+            }
+
+            const auto version = detail::read_pod<std::uint32_t>(in);
+            if (version != detail::kNativeStateVersion) {
+                throw std::runtime_error("unsupported native delta sidecar version");
+            }
+
+            const auto expected_live_size = detail::read_pod<std::uint64_t>(in);
+            const auto entry_count = detail::read_pod<std::uint64_t>(in);
+            std::vector<EntryLocation> entries(static_cast<std::size_t>(entry_count));
+            if (!entries.empty()) {
+                in.read(reinterpret_cast<char*>(entries.data()),
+                        static_cast<std::streamsize>(entries.size() * sizeof(EntryLocation)));
+                if (!in) {
+                    throw std::runtime_error("failed to read native delta entry table");
+                }
+            }
+            const auto bytes_size = detail::read_pod<std::uint64_t>(in);
+            std::vector<char> bytes(static_cast<std::size_t>(bytes_size));
+            if (!bytes.empty()) {
+                in.read(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+                if (!in) {
+                    throw std::runtime_error("failed to read native delta arena payload");
+                }
+            }
+
+            arena_.restore_bytes(std::move(bytes));
+            entries_by_id_ = std::move(entries);
+            rebuild_indexes_from_storage();
+            if (live_size_ != static_cast<std::size_t>(expected_live_size)) {
+                throw std::runtime_error("native delta live-size mismatch");
+            }
+            return true;
+        } catch (...) {
+            clear();
+            return false;
+        }
+    }
+
     [[nodiscard]] SegmentMemoryUsage memory_usage() const noexcept {
         SegmentMemoryUsage usage;
         usage.arena_bytes = arena_.bytes_reserved();
@@ -204,6 +284,15 @@ public:
     void clear(std::size_t reserve_bytes = 0) {
         arena_.clear(reserve_bytes);
         entries_by_id_.clear();
+        clear_indexes();
+#if defined(STRING_BIMAP_HAS_ARRAY_HASH)
+        array_map_index_.clear();
+#endif
+        live_size_ = 0;
+    }
+
+private:
+    void clear_indexes() {
         fallback_index_.clear();
 #if defined(STRING_BIMAP_HAS_ARRAY_HASH)
         array_map_index_.clear();
@@ -211,10 +300,34 @@ public:
 #if defined(STRING_BIMAP_HAS_HAT_TRIE)
         compact_index_.clear();
 #endif
-        live_size_ = 0;
     }
 
-private:
+    void rebuild_indexes_from_storage() {
+        clear_indexes();
+        live_size_ = 0;
+        if (!use_compact_index()) {
+            detail::map_reserve(fallback_index_, entries_by_id_.size());
+        }
+        for (StringId id = 0; id < entries_by_id_.size(); ++id) {
+            if (!entries_by_id_[id].live()) {
+                continue;
+            }
+            const auto value = arena_.view(entries_by_id_[id]);
+            if (use_array_map_index()) {
+#if defined(STRING_BIMAP_HAS_ARRAY_HASH)
+                array_map_index_.insert(value, id);
+#endif
+            } else if (use_compact_index()) {
+#if defined(STRING_BIMAP_HAS_HAT_TRIE)
+                compact_index_.insert(value, id);
+#endif
+            } else {
+                detail::map_insert_or_assign(fallback_index_, value, id);
+            }
+            ++live_size_;
+        }
+    }
+
 #if defined(STRING_BIMAP_HAS_HAT_TRIE)
     class CountingSerializer {
     public:
