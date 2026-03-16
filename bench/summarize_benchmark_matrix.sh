@@ -10,6 +10,8 @@ if [[ ! -d "${in_dir}" ]]; then
   exit 1
 fi
 
+profiles=(marisa_array_map array_map marisa fast)
+
 extract_ns() {
   local file="$1"
   local metric="$2"
@@ -44,8 +46,20 @@ tmp_csv="$(mktemp)"
   shopt -s nullglob
   for file in "${in_dir}"/*.txt; do
     base="$(basename "${file}" .txt)"
-    dataset="${base%_*}"
-    profile="${base##*_}"
+    dataset=""
+    profile=""
+    for candidate in "${profiles[@]}"; do
+      suffix="_${candidate}"
+      if [[ "${base}" == *"${suffix}" ]]; then
+        dataset="${base%"${suffix}"}"
+        profile="${candidate}"
+        break
+      fi
+    done
+    if [[ -z "${profile}" ]]; then
+      echo "warning: could not parse profile from ${base}" >&2
+      continue
+    fi
     insert_ns="$(extract_ns "${file}" insert || true)"
     find_ns="$(extract_ns "${file}" find_id || true)"
     get_ns="$(extract_ns "${file}" get_string || true)"
@@ -62,10 +76,10 @@ tmp_csv="$(mktemp)"
 mv "${tmp_csv}" "${csv_out}"
 
 {
-  echo "| Dataset | Profile | Insert ns/op | Find ns/op | Get ns/op | Load ns/op | Steady Loaded ns/op | Internal After Load | Compact ns/op |"
-  echo "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"
+  echo "| Dataset | Profile | Insert ns/op | Find ns/op | Get ns/op | Load ns/op | Steady Loaded ns/op | Internal After Load | Compact ns/op | Mixed Load ns/op | Compacted Load ns/op |"
+  echo "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"
   tail -n +2 "${csv_out}" | while IFS=, read -r dataset profile insert_ns find_ns get_ns load_ns steady_ns internal_load compact_ns mixed_load_ns compacted_load_ns; do
-    echo "| ${dataset} | ${profile} | ${insert_ns:-} | ${find_ns:-} | ${get_ns:-} | ${load_ns:-} | ${steady_ns:-} | ${internal_load:-} | ${compact_ns:-} |"
+    echo "| ${dataset} | ${profile} | ${insert_ns:-} | ${find_ns:-} | ${get_ns:-} | ${load_ns:-} | ${steady_ns:-} | ${internal_load:-} | ${compact_ns:-} | ${mixed_load_ns:-} | ${compacted_load_ns:-} |"
   done
 } > "${md_out}"
 
