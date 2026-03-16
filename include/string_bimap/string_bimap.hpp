@@ -73,14 +73,26 @@ public:
     // id is absent or deleted. The returned view is invalidated by any mutation
     // or by compact().
     [[nodiscard]] std::string_view get_string(StringId id) const {
+        const auto value = try_get_string(id);
+        return value.has_value() ? *value : std::string_view{};
+    }
+
+    // Returns a view to the live string stored under id, or std::nullopt if the
+    // id is absent or deleted. The returned view is invalidated by any mutation
+    // or by compact().
+    [[nodiscard]] std::optional<std::string_view> try_get_string(StringId id) const {
         if (tombstones_.contains(id)) {
-            return {};
+            return std::nullopt;
         }
         const auto delta_value = delta_.get_string(id);
         if (!delta_value.empty() || delta_.contains_id(id)) {
             return delta_value;
         }
-        return base_.get_string(id);
+        const auto base_value = base_.get_string(id);
+        if (!base_value.empty() || base_.contains_id(id)) {
+            return base_value;
+        }
+        return std::nullopt;
     }
 
     [[nodiscard]] bool contains_id(StringId id) const {

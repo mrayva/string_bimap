@@ -244,9 +244,17 @@ endif()
 
 if(STRING_BIMAP_BUILD_TESTS)
     enable_testing()
-    add_executable(string_bimap_smoke_test tests/smoke.cpp)
-    target_link_libraries(string_bimap_smoke_test PRIVATE string_bimap::string_bimap)
-    add_test(NAME string_bimap_smoke_test COMMAND string_bimap_smoke_test)
+    add_executable(string_bimap_core_test tests/core_test.cpp)
+    target_link_libraries(string_bimap_core_test PRIVATE string_bimap::string_bimap)
+    add_test(NAME string_bimap_core_test COMMAND string_bimap_core_test)
+
+    add_executable(string_bimap_persistence_test tests/persistence_test.cpp)
+    target_link_libraries(string_bimap_persistence_test PRIVATE string_bimap::string_bimap)
+    add_test(NAME string_bimap_persistence_test COMMAND string_bimap_persistence_test)
+
+    add_executable(string_bimap_query_test tests/query_test.cpp)
+    target_link_libraries(string_bimap_query_test PRIVATE string_bimap::string_bimap)
+    add_test(NAME string_bimap_query_test COMMAND string_bimap_query_test)
 endif()
 
 if(STRING_BIMAP_BUILD_BENCHMARKS)

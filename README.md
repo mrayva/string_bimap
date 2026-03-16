@@ -41,6 +41,27 @@ string_bimap::StringBimap keyvi(0, string_bimap::BackendProfile::CompactMemoryKe
 
 If optional dependencies are not compiled in, the compact profiles degrade gracefully to the fallback structures for the missing parts.
 
+## Backend Status
+
+Recommended starting points:
+
+- `FastLookup`: simplest baseline for point-query-heavy use.
+- `FastLookupArrayMap`: strongest current mutable-layer profile when lookup and memory matter more than insert speed.
+- `CompactMemoryMarisa`: strongest compact static backend overall on the benchmarked corpora.
+- `CompactMemoryMarisaArrayMap`: best combined profile to evaluate first when you want a compact base plus a lean mutable overlay.
+
+Supported but more specialized:
+
+- `CompactMemory`: `xcdat` static backend. Still useful for some short-key exact-lookup and footprint cases.
+
+Experimental and currently underperforming:
+
+- `CompactMemoryMarisaFsst`
+- `CompactMemoryKeyvi`
+- `CompactMemoryFst`
+
+These remain in-tree for comparison, but the benchmark results in this repository do not currently justify them over `CompactMemoryMarisa`.
+
 ## Invariants
 
 - IDs are assigned monotonically and are stable for the lifetime of the dictionary.
@@ -127,6 +148,14 @@ cmake --build build-vcpkg --target string_bimap_bench
 ```
 
 The benchmark reports bulk insert, exact lookup, reverse lookup, prefix traversal, compaction, save, and load timings on a synthetic prefix-heavy dataset. It also prints both the compiled-in optional backends and the selected runtime profile.
+
+For a reproducible profile/corpus matrix, use:
+
+```sh
+./bench/run_benchmark_matrix.sh build-vcpkg bench/results
+```
+
+That script runs the current recommended profiles across whichever standard datasets are present under `/tmp` and writes one result file per corpus/profile pair.
 
 ### Current Summary
 
