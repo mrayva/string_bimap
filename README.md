@@ -26,11 +26,14 @@ Mutable delta:
 Recommended starting points:
 
 - `FastLookup`: simplest baseline for point-query-heavy use
-- `FastLookupArrayMap`: stronger mutable-layer profile when lookup and memory matter more than insert speed
-- `CompactMemoryMarisa`: strongest compact static backend overall on the benchmarked corpora
-- `CompactMemoryMarisaArrayMap`: compact base plus lean mutable overlay
+- `CompactMemoryMarisaArrayMap`: the default serious profile for read-heavy use when you want a compact base plus a lean mutable overlay
 
 Also keep `CompactMemory` (`xcdat`) in the evaluation set. It remains a first-class supported profile and is still useful for some short-key exact-lookup and footprint cases.
+
+Other useful profiles:
+
+- `FastLookupArrayMap`: stronger mutable-layer profile when lookup and memory matter more than insert speed, but without a compact base
+- `CompactMemoryMarisa`: strongest compact static backend if you want to evaluate the base without the `array_map` delta variant
 
 Example:
 
@@ -44,6 +47,11 @@ string_bimap::StringBimap marisa_array_map(
 ```
 
 If optional dependencies are not compiled in, compact profiles fall back to the standard map-based structures for the missing parts.
+
+In practice, start with:
+
+- `FastLookup` if simplicity and raw point-query speed dominate
+- `CompactMemoryMarisaArrayMap` if this is a real deployment candidate and you care about steady-state memory
 
 ## Invariants
 
@@ -123,6 +131,7 @@ For a reproducible matrix over the standard corpora found in `/tmp`:
 
 ```sh
 ./bench/run_benchmark_matrix.sh build-vcpkg bench/results
+./bench/summarize_benchmark_matrix.sh bench/results
 ```
 
 The benchmark reports:
@@ -135,12 +144,17 @@ The benchmark reports:
 - RSS and internal memory accounting
 - native sidecar sizes
 
+The summary script emits:
+
+- `bench/results/summary.csv`
+- `bench/results/summary.md`
+
 ## Current Read
 
-- `FastLookup` is still the default recommendation for point-query-heavy workloads.
+- `FastLookup` is still the default recommendation for the simplest point-query-heavy setup.
+- `CompactMemoryMarisaArrayMap` is the default serious profile to test first for a real read-heavy deployment.
 - `FastLookupArrayMap` materially reduces mutable-index memory and often improves read-heavy delta lookup.
 - `CompactMemoryMarisa` is the best overall compact backend on the benchmarked corpora.
-- `CompactMemoryMarisaArrayMap` is the combined profile to test when you want a compact base plus a lean mutable layer.
 - `CompactMemory` (`xcdat`) remains a first-class profile and is still worth checking on short identifier-like keys where it can be slightly smaller.
 
 Datasets used in this repo’s benchmark runs include:
@@ -151,3 +165,8 @@ Datasets used in this repo’s benchmark runs include:
 - `/tmp/enwiki-latest-all-titles-in-ns0.keys.txt`
 - `/tmp/naskitis/distinct_1`
 - `/tmp/naskitis/skew1_1`
+
+## Maintenance
+
+- [CHANGELOG.md](/home/mrayva/fsst_plus/CHANGELOG.md) tracks repository-level changes.
+- The benchmark scripts live in [bench](/home/mrayva/fsst_plus/bench).
