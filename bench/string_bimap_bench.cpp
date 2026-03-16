@@ -348,6 +348,17 @@ template <class Fn>
     return std::chrono::duration<double, std::milli>(end - start).count();
 }
 
+[[nodiscard]] std::string replace_or_append_suffix(const std::string& path, std::string_view suffix) {
+    if (path.empty()) {
+        return {};
+    }
+    const auto dot = path.rfind('.');
+    if (dot == std::string::npos || dot == 0) {
+        return path + std::string(suffix);
+    }
+    return path.substr(0, dot) + std::string(suffix) + path.substr(dot);
+}
+
 void print_metric(std::string_view name, double total_ms, std::size_t ops) {
     const double ns_per_op = ops == 0 ? 0.0 : (total_ms * 1'000'000.0) / static_cast<double>(ops);
     std::cout << std::left << std::setw(20) << name
@@ -410,6 +421,34 @@ void release_vector(std::vector<T>& values) {
     return ec ? 0 : size;
 }
 
+void print_sidecar_sizes(const std::string& path, std::string_view prefix = "sidecar") {
+    if (path.empty()) {
+        return;
+    }
+
+    const auto compact_xcdat = static_cast<std::size_t>(file_size_or_zero(path + ".compact.xcdat"));
+    const auto compact_marisa = static_cast<std::size_t>(file_size_or_zero(path + ".compact.marisa"));
+    const auto compact_fst = static_cast<std::size_t>(file_size_or_zero(path + ".compact.fst"));
+    const auto compact_keyvi = static_cast<std::size_t>(file_size_or_zero(path + ".compact.keyvi"));
+    const auto compact_ids = static_cast<std::size_t>(file_size_or_zero(path + ".compact.ids"));
+    const auto native_state = static_cast<std::size_t>(file_size_or_zero(path + ".native.state"));
+    const auto native_base = static_cast<std::size_t>(file_size_or_zero(path + ".native.base"));
+    const auto native_delta = static_cast<std::size_t>(file_size_or_zero(path + ".native.delta"));
+
+    const auto base = std::string(prefix);
+    print_memory(base + "_compact_xcdat", compact_xcdat);
+    print_memory(base + "_compact_marisa", compact_marisa);
+    print_memory(base + "_compact_fst", compact_fst);
+    print_memory(base + "_compact_keyvi", compact_keyvi);
+    print_memory(base + "_compact_ids", compact_ids);
+    print_memory(base + "_native_state", native_state);
+    print_memory(base + "_native_base", native_base);
+    print_memory(base + "_native_delta", native_delta);
+    print_memory(base + "_compact_total",
+                 compact_xcdat + compact_marisa + compact_fst + compact_keyvi + compact_ids);
+    print_memory(base + "_native_total", native_state + native_base + native_delta);
+}
+
 void print_usage(std::string_view prefix, const string_bimap::StringBimapMemoryUsage& usage) {
     print_memory(std::string(prefix) + "_base_live_strings", usage.base.live_string_bytes);
     print_memory(std::string(prefix) + "_base_arena", usage.base.arena_bytes);
@@ -436,6 +475,26 @@ void print_usage(std::string_view prefix, const string_bimap::StringBimapMemoryU
     print_memory(std::string(prefix) + "_tombstones", usage.tombstone_bytes);
     print_memory(std::string(prefix) + "_bookkeeping", usage.bookkeeping_bytes);
     print_memory(std::string(prefix) + "_total", usage.total_bytes());
+}
+
+template <class Fn>
+void for_each_loaded_read(StringBimap& dict,
+                          const std::vector<StringId>& ids,
+                          const Config& cfg,
+                          volatile std::uint64_t& sink,
+                          Fn&& on_value) {
+    for (std::size_t repeat = 0; repeat < cfg.read_repeats; ++repeat) {
+        for (const auto id : ids) {
+            const auto value = dict.get_string(id);
+            for (std::size_t i = 0; i < cfg.loaded_find_ratio; ++i) {
+                sink += dict.find_id(value).value_or(0);
+            }
+            for (std::size_t i = 0; i < cfg.loaded_get_ratio; ++i) {
+                sink += dict.get_string(id).size();
+            }
+            on_value(id, value);
+        }
+    }
 }
 
 }  // namespace
@@ -720,6 +779,7 @@ int main(int argc, char** argv) {
                                      : static_cast<std::size_t>(file_size_or_zero(cfg.serialized_file_path));
     print_metric("save", save_ms, has_phase(cfg, "save") ? dict.live_size() : 0);
     std::cout << "serialized_bytes=" << serialized_size << '\n';
+    print_sidecar_sizes(cfg.serialized_file_path, "sidecar");
 
     double load_ms = 0.0;
     StringBimap loaded(0, cfg.profile);
@@ -799,6 +859,59 @@ int main(int argc, char** argv) {
             loaded_ids.size() * cfg.read_repeats * (cfg.loaded_find_ratio + cfg.loaded_get_ratio);
     }
     print_metric("steady_loaded", loaded_steady_ms, loaded_steady_ops);
+
+    if (has_phase(cfg, "compare_snapshots")) {
+        if (cfg.serialized_file_path.empty()) {
+            throw std::invalid_argument("compare_snapshots requires --serialized-file");
+        }
+
+        const auto mixed_path = replace_or_append_suffix(cfg.serialized_file_path, ".mixed");
+        const auto compacted_path = replace_or_append_suffix(cfg.serialized_file_path, ".compacted");
+
+        const auto mixed_save_ms = run_ms([&] { dict.save(mixed_path); });
+        const auto compacted_save_ms = run_ms([&] { dict.save_compacted(compacted_path); });
+
+        StringBimap mixed_loaded(0, cfg.profile);
+        StringBimap compacted_loaded(0, cfg.profile);
+
+        const auto mixed_load_ms = run_ms([&] {
+            mixed_loaded = StringBimap::load(mixed_path);
+        });
+        const auto compacted_load_ms = run_ms([&] {
+            compacted_loaded = StringBimap::load(compacted_path);
+        });
+
+        std::vector<StringId> mixed_ids;
+        mixed_loaded.for_each_live([&](StringId id, std::string_view) { mixed_ids.push_back(id); });
+        std::vector<StringId> compacted_ids;
+        compacted_loaded.for_each_live([&](StringId id, std::string_view) { compacted_ids.push_back(id); });
+
+        const auto mixed_steady_ms = run_ms([&] {
+            for_each_loaded_read(mixed_loaded, mixed_ids, cfg, sink, [&](StringId, std::string_view) {});
+        });
+        const auto compacted_steady_ms = run_ms([&] {
+            for_each_loaded_read(compacted_loaded, compacted_ids, cfg, sink, [&](StringId, std::string_view) {});
+        });
+
+        const auto mixed_usage = mixed_loaded.memory_usage();
+        const auto compacted_usage = compacted_loaded.memory_usage();
+
+        std::cout << "snapshot_compare=true\n";
+        print_metric("mixed_save", mixed_save_ms, dict.live_size());
+        print_metric("compacted_save", compacted_save_ms, dict.live_size());
+        print_metric("mixed_load", mixed_load_ms, mixed_loaded.live_size());
+        print_metric("compacted_load", compacted_load_ms, compacted_loaded.live_size());
+        print_metric("mixed_steady_loaded", mixed_steady_ms,
+                     mixed_ids.size() * cfg.read_repeats * (cfg.loaded_find_ratio + cfg.loaded_get_ratio));
+        print_metric("compacted_steady_loaded", compacted_steady_ms,
+                     compacted_ids.size() * cfg.read_repeats * (cfg.loaded_find_ratio + cfg.loaded_get_ratio));
+        print_memory("mixed_serialized", static_cast<std::size_t>(file_size_or_zero(mixed_path)));
+        print_sidecar_sizes(mixed_path, "mixed_sidecar");
+        print_usage("mixed_internal_after_load", mixed_usage);
+        print_memory("compacted_serialized", static_cast<std::size_t>(file_size_or_zero(compacted_path)));
+        print_sidecar_sizes(compacted_path, "compacted_sidecar");
+        print_usage("compacted_internal_after_load", compacted_usage);
+    }
 
     std::cout << "phase=delta_heavy\n";
     print_memory("rss_before", rss_before);

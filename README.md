@@ -459,7 +459,7 @@ To reduce harness memory amplification on large corpora, you can limit the bench
   --seed 7
 ```
 
-Supported phase names are `insert`, `find`, `get`, `prefix`, `erase`, `compact`, `prefix_compact`, `save`, `load`, `find_loaded`, `get_loaded`, and `steady_loaded`.
+Supported phase names are `insert`, `find`, `get`, `prefix`, `erase`, `compact`, `prefix_compact`, `save`, `load`, `find_loaded`, `get_loaded`, `steady_loaded`, and `compare_snapshots`.
 The benchmark also prints internal memory accounting for each phase, including live string payload bytes, arena slack, entry-table bytes, ID-hole overhead, fallback hash bucket/key/node estimates, compact-index bytes, tombstones, and total estimated in-structure bytes. `xcdat` compact-index bytes come from its native byte-count API; `hat-trie` compact-index bytes are estimated from its serialized representation because the library does not expose a direct in-memory byte counter.
 
 You can also split serialization and deserialization into separate benchmark runs with `--serialized-file`:
@@ -481,6 +481,45 @@ You can also split serialization and deserialization into separate benchmark run
 ```
 
 If `load` is requested without `save` in the same run, `--serialized-file` is required.
+
+To measure mixed-state native snapshot persistence, save without `compact` and inspect the reported
+`sidecar_native_*` bytes:
+
+```sh
+./build-vcpkg/string_bimap_bench \
+  --line-file /tmp/enwiki-latest-all-titles-in-ns0.keys.txt \
+  --profile marisa_array_map \
+  --phases insert,erase,save \
+  --serialized-file /tmp/string_bimap_enwiki_mixed.bin
+
+./build-vcpkg/string_bimap_bench \
+  --profile marisa_array_map \
+  --phases load,steady_loaded \
+  --read-repeats 5 \
+  --loaded-find-ratio 4 \
+  --loaded-get-ratio 1 \
+  --serialized-file /tmp/string_bimap_enwiki_mixed.bin
+```
+
+To compare mixed-state snapshots against compacted snapshots in one run, use `compare_snapshots`:
+
+```sh
+./build-vcpkg/string_bimap_bench \
+  --line-file /tmp/enwiki-latest-all-titles-in-ns0.keys.txt \
+  --profile marisa_array_map \
+  --phases insert,erase,compare_snapshots \
+  --serialized-file /tmp/string_bimap_enwiki_compare.bin \
+  --read-repeats 5 \
+  --loaded-find-ratio 4 \
+  --loaded-get-ratio 1
+```
+
+This emits paired metrics such as:
+
+- `mixed_save` / `compacted_save`
+- `mixed_load` / `compacted_load`
+- `mixed_steady_loaded` / `compacted_steady_loaded`
+- `sidecar_native_*` and `sidecar_compact_*` for both snapshot styles
 
 For compact base backends, file-based persistence may create one of:
 
