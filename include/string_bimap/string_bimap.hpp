@@ -319,7 +319,7 @@ public:
         const auto next_id = detail::read_pod<StringId>(in);
         BackendProfile profile = BackendProfile::FastLookup;
         if (version >= 2) {
-            profile = detail::read_pod<BackendProfile>(in);
+            profile = normalize_profile(detail::read_pod<std::uint8_t>(in));
         }
 
         StringBimap dict(0, profile);
@@ -366,7 +366,7 @@ public:
         const auto next_id = detail::read_pod<StringId>(in);
         BackendProfile profile = BackendProfile::FastLookup;
         if (version >= 2) {
-            profile = detail::read_pod<BackendProfile>(in);
+            profile = normalize_profile(detail::read_pod<std::uint8_t>(in));
         }
 
         StringBimap dict(0, profile);
@@ -390,25 +390,17 @@ public:
         const bool has_marisa_sidecars =
             std::filesystem::exists(detail::compact_marisa_sidecar_path(path)) &&
             std::filesystem::exists(detail::compact_ids_sidecar_path(path));
-        const bool has_fst_sidecar =
-            std::filesystem::exists(detail::compact_fst_sidecar_path(path));
-        const bool has_keyvi_sidecar =
-            std::filesystem::exists(detail::compact_keyvi_sidecar_path(path));
         if ((profile == BackendProfile::CompactMemory && has_xcdat_sidecars) ||
             ((profile == BackendProfile::CompactMemoryMarisa ||
               profile == BackendProfile::CompactMemoryMarisaArrayMap) &&
-             has_marisa_sidecars) ||
-            (profile == BackendProfile::CompactMemoryKeyvi && has_keyvi_sidecar) ||
-            (profile == BackendProfile::CompactMemoryFst && has_fst_sidecar)) {
+             has_marisa_sidecars)) {
             loaded_native_compact = dict.base_.load_native_compact_index(std::move(items), path);
         }
         if (!loaded_native_compact) {
             dict.base_.rebuild(std::move(items));
             if ((profile == BackendProfile::CompactMemory ||
                  profile == BackendProfile::CompactMemoryMarisa ||
-                 profile == BackendProfile::CompactMemoryMarisaArrayMap ||
-                 profile == BackendProfile::CompactMemoryKeyvi ||
-                 profile == BackendProfile::CompactMemoryFst) &&
+                 profile == BackendProfile::CompactMemoryMarisaArrayMap) &&
                 dict.base_.has_native_compact_index()) {
                 dict.base_.save_native_compact_index(path);
             }
@@ -441,6 +433,18 @@ public:
     }
 
 private:
+    [[nodiscard]] static BackendProfile normalize_profile(std::uint8_t raw) noexcept {
+        switch (static_cast<BackendProfile>(raw)) {
+            case BackendProfile::FastLookup:
+            case BackendProfile::CompactMemory:
+            case BackendProfile::CompactMemoryMarisa:
+            case BackendProfile::FastLookupArrayMap:
+            case BackendProfile::CompactMemoryMarisaArrayMap:
+                return static_cast<BackendProfile>(raw);
+        }
+        return BackendProfile::CompactMemoryMarisa;
+    }
+
     struct NativeSnapshotHeader {
         std::array<char, detail::kNativeStateMagic.size()> magic = detail::kNativeStateMagic;
         std::uint32_t version = detail::kNativeStateVersion;
@@ -515,7 +519,7 @@ private:
             }
 
             const auto next_id = detail::read_pod<StringId>(in);
-            const auto profile = detail::read_pod<BackendProfile>(in);
+            const auto profile = normalize_profile(detail::read_pod<std::uint8_t>(in));
             const auto live_size = detail::read_pod<std::uint64_t>(in);
             const auto tombstone_word_count = detail::read_pod<std::uint64_t>(in);
             std::vector<std::uint64_t> tombstone_words(static_cast<std::size_t>(tombstone_word_count));
@@ -560,8 +564,6 @@ private:
         std::error_code ec;
         std::filesystem::remove(detail::compact_trie_sidecar_path(path), ec);
         std::filesystem::remove(detail::compact_marisa_sidecar_path(path), ec);
-        std::filesystem::remove(detail::compact_fst_sidecar_path(path), ec);
-        std::filesystem::remove(detail::compact_keyvi_sidecar_path(path), ec);
         std::filesystem::remove(detail::compact_ids_sidecar_path(path), ec);
     }
 

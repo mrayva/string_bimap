@@ -1,5 +1,6 @@
 /build/
 /build-vcpkg/
+/build-*/
 /Testing/
 /CMakeFiles/
 /CMakeCache.txt

@@ -129,10 +129,6 @@ void test_compact_native_sidecars() {
 #if defined(STRING_BIMAP_HAS_MARISA)
     run(BackendProfile::CompactMemoryMarisa);
 #endif
-#if defined(STRING_BIMAP_HAS_KEYVI)
-    run(BackendProfile::CompactMemoryKeyvi);
-#endif
-    run(BackendProfile::CompactMemoryFst);
 #endif
 }
 
@@ -173,10 +169,6 @@ void test_save_compacted_preserves_ids_and_sidecars() {
 #if defined(STRING_BIMAP_HAS_MARISA)
     run(BackendProfile::CompactMemoryMarisa);
 #endif
-#if defined(STRING_BIMAP_HAS_KEYVI)
-    run(BackendProfile::CompactMemoryKeyvi);
-#endif
-    run(BackendProfile::CompactMemoryFst);
 #endif
 }
 

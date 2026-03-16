@@ -51,8 +51,6 @@ inline void remove_all_sidecars(const std::string& path) {
     std::filesystem::remove(path);
     std::filesystem::remove(path + ".compact.xcdat");
     std::filesystem::remove(path + ".compact.marisa");
-    std::filesystem::remove(path + ".compact.keyvi");
-    std::filesystem::remove(path + ".compact.fst");
     std::filesystem::remove(path + ".compact.ids");
     std::filesystem::remove(path + ".native.state");
     std::filesystem::remove(path + ".native.base");
@@ -66,12 +64,6 @@ inline void remove_all_sidecars(const std::string& path) {
         case BackendProfile::CompactMemoryMarisa:
         case BackendProfile::CompactMemoryMarisaArrayMap:
             return path + ".compact.marisa";
-        case BackendProfile::CompactMemoryMarisaFsst:
-            return {};
-        case BackendProfile::CompactMemoryKeyvi:
-            return path + ".compact.keyvi";
-        case BackendProfile::CompactMemoryFst:
-            return path + ".compact.fst";
         case BackendProfile::FastLookupArrayMap:
             return {};
         case BackendProfile::FastLookup:
@@ -93,11 +85,6 @@ void for_each_profile(Fn&& fn) {
     fn(BackendProfile::CompactMemory);
     fn(BackendProfile::CompactMemoryMarisa);
     fn(BackendProfile::CompactMemoryMarisaArrayMap);
-#if defined(STRING_BIMAP_HAS_FSST)
-    fn(BackendProfile::CompactMemoryMarisaFsst);
-#endif
-    fn(BackendProfile::CompactMemoryKeyvi);
-    fn(BackendProfile::CompactMemoryFst);
 }
 
 }  // namespace string_bimap_test

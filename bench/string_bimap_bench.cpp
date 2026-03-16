@@ -70,12 +70,6 @@ struct Config {
             return "compact";
         case BackendProfile::CompactMemoryMarisa:
             return "marisa";
-        case BackendProfile::CompactMemoryMarisaFsst:
-            return "marisa_fsst";
-        case BackendProfile::CompactMemoryKeyvi:
-            return "keyvi";
-        case BackendProfile::CompactMemoryFst:
-            return "fst";
         case BackendProfile::FastLookupArrayMap:
             return "array_map";
         case BackendProfile::CompactMemoryMarisaArrayMap:
@@ -158,12 +152,6 @@ struct Config {
                 cfg.profile = BackendProfile::CompactMemory;
             } else if (value == "marisa") {
                 cfg.profile = BackendProfile::CompactMemoryMarisa;
-            } else if (value == "marisa_fsst") {
-                cfg.profile = BackendProfile::CompactMemoryMarisaFsst;
-            } else if (value == "keyvi") {
-                cfg.profile = BackendProfile::CompactMemoryKeyvi;
-            } else if (value == "fst") {
-                cfg.profile = BackendProfile::CompactMemoryFst;
             } else if (value == "array_map") {
                 cfg.profile = BackendProfile::FastLookupArrayMap;
             } else if (value == "marisa_array_map") {
@@ -439,8 +427,6 @@ void print_sidecar_sizes(const std::string& path, std::string_view prefix = "sid
 
     const auto compact_xcdat = static_cast<std::size_t>(file_size_or_zero(path + ".compact.xcdat"));
     const auto compact_marisa = static_cast<std::size_t>(file_size_or_zero(path + ".compact.marisa"));
-    const auto compact_fst = static_cast<std::size_t>(file_size_or_zero(path + ".compact.fst"));
-    const auto compact_keyvi = static_cast<std::size_t>(file_size_or_zero(path + ".compact.keyvi"));
     const auto compact_ids = static_cast<std::size_t>(file_size_or_zero(path + ".compact.ids"));
     const auto native_state = static_cast<std::size_t>(file_size_or_zero(path + ".native.state"));
     const auto native_base = static_cast<std::size_t>(file_size_or_zero(path + ".native.base"));
@@ -449,14 +435,11 @@ void print_sidecar_sizes(const std::string& path, std::string_view prefix = "sid
     const auto base = std::string(prefix);
     print_memory(base + "_compact_xcdat", compact_xcdat);
     print_memory(base + "_compact_marisa", compact_marisa);
-    print_memory(base + "_compact_fst", compact_fst);
-    print_memory(base + "_compact_keyvi", compact_keyvi);
     print_memory(base + "_compact_ids", compact_ids);
     print_memory(base + "_native_state", native_state);
     print_memory(base + "_native_base", native_base);
     print_memory(base + "_native_delta", native_delta);
-    print_memory(base + "_compact_total",
-                 compact_xcdat + compact_marisa + compact_fst + compact_keyvi + compact_ids);
+    print_memory(base + "_compact_total", compact_xcdat + compact_marisa + compact_ids);
     print_memory(base + "_native_total", native_state + native_base + native_delta);
 }
 
@@ -684,10 +667,7 @@ int main(int argc, char** argv) {
 #if defined(STRING_BIMAP_HAS_MARISA)
     std::cout << ",marisa";
 #endif
-#if defined(STRING_BIMAP_HAS_KEYVI)
-    std::cout << ",keyvi";
-#endif
-    std::cout << ",fst\n";
+    std::cout << '\n';
     std::cout << "compiled_delta_index=unordered_map";
 #if defined(STRING_BIMAP_HAS_ARRAY_HASH)
     std::cout << ",array_map";

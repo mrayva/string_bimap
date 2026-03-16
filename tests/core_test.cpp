@@ -27,12 +27,6 @@ void test_backend_profile_explicit_selection() {
     StringBimap marisa_array_map(0, BackendProfile::CompactMemoryMarisaArrayMap);
     expect(marisa_array_map.backend_profile() == BackendProfile::CompactMemoryMarisaArrayMap,
            "marisa_array_map profile should be selectable");
-
-    StringBimap keyvi(0, BackendProfile::CompactMemoryKeyvi);
-    expect(keyvi.backend_profile() == BackendProfile::CompactMemoryKeyvi, "keyvi profile should be selectable");
-
-    StringBimap fst(0, BackendProfile::CompactMemoryFst);
-    expect(fst.backend_profile() == BackendProfile::CompactMemoryFst, "fst profile should be selectable");
 }
 
 void test_empty_strings_are_ignored(BackendProfile profile) {

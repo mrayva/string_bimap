@@ -14,7 +14,7 @@
 
 namespace string_bimap::detail {
 
-inline constexpr std::array<char, 8> kFileMagic = {'F', 'S', 'S', 'T', 'P', 'L', 'U', 'S'};
+inline constexpr std::array<char, 8> kFileMagic = {'S', 'T', 'R', 'B', 'M', 'A', 'P', '1'};
 inline constexpr std::uint32_t kFormatVersion = 2;
 inline constexpr std::array<char, 8> kNativeStateMagic = {'S', 'B', 'N', 'A', 'T', 'I', 'V', 'E'};
 inline constexpr std::uint32_t kNativeStateVersion = 1;
@@ -63,14 +63,6 @@ inline std::string compact_trie_sidecar_path(const std::string& path) {
 
 inline std::string compact_marisa_sidecar_path(const std::string& path) {
     return path + ".compact.marisa";
-}
-
-inline std::string compact_fst_sidecar_path(const std::string& path) {
-    return path + ".compact.fst";
-}
-
-inline std::string compact_keyvi_sidecar_path(const std::string& path) {
-    return path + ".compact.keyvi";
 }
 
 inline std::string compact_ids_sidecar_path(const std::string& path) {
