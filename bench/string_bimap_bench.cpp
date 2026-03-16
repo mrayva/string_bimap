@@ -50,6 +50,7 @@ struct Config {
     std::size_t read_limit = 0;
     std::size_t loaded_find_ratio = 1;
     std::size_t loaded_get_ratio = 1;
+    string_bimap::CompactionPolicy compaction_policy{};
     BackendProfile profile = BackendProfile::FastLookup;
 };
 
@@ -129,6 +130,16 @@ struct Config {
             cfg.loaded_find_ratio = static_cast<std::size_t>(std::stoull(argv[++i]));
         } else if (arg == "--loaded-get-ratio" && i + 1 < argc) {
             cfg.loaded_get_ratio = static_cast<std::size_t>(std::stoull(argv[++i]));
+        } else if (arg == "--policy-min-delta-ids" && i + 1 < argc) {
+            cfg.compaction_policy.min_delta_ids = static_cast<std::size_t>(std::stoull(argv[++i]));
+        } else if (arg == "--policy-max-delta-fraction" && i + 1 < argc) {
+            cfg.compaction_policy.max_delta_fraction = std::stod(argv[++i]);
+        } else if (arg == "--policy-min-tombstone-ids" && i + 1 < argc) {
+            cfg.compaction_policy.min_tombstone_ids = static_cast<std::size_t>(std::stoull(argv[++i]));
+        } else if (arg == "--policy-max-tombstone-fraction" && i + 1 < argc) {
+            cfg.compaction_policy.max_tombstone_fraction = std::stod(argv[++i]);
+        } else if (arg == "--policy-min-delta-bytes" && i + 1 < argc) {
+            cfg.compaction_policy.min_delta_bytes = static_cast<std::size_t>(std::stoull(argv[++i]));
         } else if (arg == "--column" && i + 1 < argc) {
             cfg.column = argv[++i];
         } else if (arg == "--keys" && i + 1 < argc) {
@@ -477,6 +488,22 @@ void print_usage(std::string_view prefix, const string_bimap::StringBimapMemoryU
     print_memory(std::string(prefix) + "_total", usage.total_bytes());
 }
 
+void print_compaction_stats(std::string_view prefix,
+                            const string_bimap::CompactionStats& stats,
+                            bool should_compact) {
+    print_memory(std::string(prefix) + "_total_ids", stats.total_ids);
+    print_memory(std::string(prefix) + "_live_ids", stats.live_ids);
+    print_memory(std::string(prefix) + "_base_live_ids", stats.base_live_ids);
+    print_memory(std::string(prefix) + "_delta_live_ids", stats.delta_live_ids);
+    print_memory(std::string(prefix) + "_tombstone_ids", stats.tombstone_ids);
+    print_memory(std::string(prefix) + "_delta_bytes", stats.delta_bytes);
+    std::cout << prefix << "_delta_fraction=" << std::fixed << std::setprecision(6)
+              << stats.delta_fraction() << '\n';
+    std::cout << prefix << "_tombstone_fraction=" << std::fixed << std::setprecision(6)
+              << stats.tombstone_fraction() << '\n';
+    std::cout << prefix << "_should_compact=" << (should_compact ? "true" : "false") << '\n';
+}
+
 template <class Fn>
 void for_each_loaded_read(StringBimap& dict,
                           const std::vector<StringId>& ids,
@@ -539,6 +566,11 @@ int main(int argc, char** argv) {
                   << " read_repeats=" << cfg.read_repeats
                   << " loaded_find_ratio=" << cfg.loaded_find_ratio
                   << " loaded_get_ratio=" << cfg.loaded_get_ratio
+                  << " policy_min_delta_ids=" << cfg.compaction_policy.min_delta_ids
+                  << " policy_max_delta_fraction=" << cfg.compaction_policy.max_delta_fraction
+                  << " policy_min_tombstone_ids=" << cfg.compaction_policy.min_tombstone_ids
+                  << " policy_max_tombstone_fraction=" << cfg.compaction_policy.max_tombstone_fraction
+                  << " policy_min_delta_bytes=" << cfg.compaction_policy.min_delta_bytes
                   << " phases=";
         bool first_phase = true;
         for (const auto& phase : cfg.phases) {
@@ -559,6 +591,11 @@ int main(int argc, char** argv) {
                   << " read_repeats=" << cfg.read_repeats
                   << " loaded_find_ratio=" << cfg.loaded_find_ratio
                   << " loaded_get_ratio=" << cfg.loaded_get_ratio
+                  << " policy_min_delta_ids=" << cfg.compaction_policy.min_delta_ids
+                  << " policy_max_delta_fraction=" << cfg.compaction_policy.max_delta_fraction
+                  << " policy_min_tombstone_ids=" << cfg.compaction_policy.min_tombstone_ids
+                  << " policy_max_tombstone_fraction=" << cfg.compaction_policy.max_tombstone_fraction
+                  << " policy_min_delta_bytes=" << cfg.compaction_policy.min_delta_bytes
                   << " phases=";
         bool first_phase = true;
         for (const auto& phase : cfg.phases) {
@@ -576,6 +613,11 @@ int main(int argc, char** argv) {
                   << " read_repeats=" << cfg.read_repeats
                   << " loaded_find_ratio=" << cfg.loaded_find_ratio
                   << " loaded_get_ratio=" << cfg.loaded_get_ratio
+                  << " policy_min_delta_ids=" << cfg.compaction_policy.min_delta_ids
+                  << " policy_max_delta_fraction=" << cfg.compaction_policy.max_delta_fraction
+                  << " policy_min_tombstone_ids=" << cfg.compaction_policy.min_tombstone_ids
+                  << " policy_max_tombstone_fraction=" << cfg.compaction_policy.max_tombstone_fraction
+                  << " policy_min_delta_bytes=" << cfg.compaction_policy.min_delta_bytes
                   << " phases=";
         bool first_phase = true;
         for (const auto& phase : cfg.phases) {
@@ -596,6 +638,11 @@ int main(int argc, char** argv) {
                   << " read_repeats=" << cfg.read_repeats
                   << " loaded_find_ratio=" << cfg.loaded_find_ratio
                   << " loaded_get_ratio=" << cfg.loaded_get_ratio
+                  << " policy_min_delta_ids=" << cfg.compaction_policy.min_delta_ids
+                  << " policy_max_delta_fraction=" << cfg.compaction_policy.max_delta_fraction
+                  << " policy_min_tombstone_ids=" << cfg.compaction_policy.min_tombstone_ids
+                  << " policy_max_tombstone_fraction=" << cfg.compaction_policy.max_tombstone_fraction
+                  << " policy_min_delta_bytes=" << cfg.compaction_policy.min_delta_bytes
                   << " phases=";
         bool first_phase = true;
         for (const auto& phase : cfg.phases) {
@@ -615,6 +662,11 @@ int main(int argc, char** argv) {
                   << " read_repeats=" << cfg.read_repeats
                   << " loaded_find_ratio=" << cfg.loaded_find_ratio
                   << " loaded_get_ratio=" << cfg.loaded_get_ratio
+                  << " policy_min_delta_ids=" << cfg.compaction_policy.min_delta_ids
+                  << " policy_max_delta_fraction=" << cfg.compaction_policy.max_delta_fraction
+                  << " policy_min_tombstone_ids=" << cfg.compaction_policy.min_tombstone_ids
+                  << " policy_max_tombstone_fraction=" << cfg.compaction_policy.max_tombstone_fraction
+                  << " policy_min_delta_bytes=" << cfg.compaction_policy.min_delta_bytes
                   << " phases=";
         bool first_phase = true;
         for (const auto& phase : cfg.phases) {
@@ -715,6 +767,10 @@ int main(int argc, char** argv) {
         }
     }
 
+    const auto stats_after_mutation = dict.compaction_stats();
+    const bool should_compact_after_mutation = dict.should_compact(cfg.compaction_policy);
+    print_compaction_stats("compaction_state", stats_after_mutation, should_compact_after_mutation);
+
     if (cfg.release_inputs_before_compact) {
         release_vector(keys);
         release_vector(read_keys);
@@ -728,8 +784,25 @@ int main(int argc, char** argv) {
         });
     }
     print_metric("compact", compact_ms, dict.live_size());
+
+    double compact_if_needed_ms = 0.0;
+    bool compact_if_needed_did_compact = false;
+    if (has_phase(cfg, "compact_if_needed")) {
+        compact_if_needed_ms = run_ms([&] {
+            compact_if_needed_did_compact = dict.compact_if_needed(cfg.compaction_policy);
+        });
+    }
+    print_metric("compact_if_needed", compact_if_needed_ms,
+                 has_phase(cfg, "compact_if_needed") ? dict.live_size() : 0);
+    std::cout << "compact_if_needed_performed="
+              << (compact_if_needed_did_compact ? "true" : "false") << '\n';
+
     const auto rss_after_compact = current_rss_bytes();
     const auto usage_after_compact = dict.memory_usage();
+    const auto stats_after_compact = dict.compaction_stats();
+    print_compaction_stats("compaction_state_after_compact",
+                           stats_after_compact,
+                           dict.should_compact(cfg.compaction_policy));
 
     std::size_t compact_prefix_hits = 0;
     double compact_prefix_ms = 0.0;

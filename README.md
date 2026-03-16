@@ -459,8 +459,31 @@ To reduce harness memory amplification on large corpora, you can limit the bench
   --seed 7
 ```
 
-Supported phase names are `insert`, `find`, `get`, `prefix`, `erase`, `compact`, `prefix_compact`, `save`, `load`, `find_loaded`, `get_loaded`, `steady_loaded`, and `compare_snapshots`.
+Supported phase names are `insert`, `find`, `get`, `prefix`, `erase`, `compact`, `compact_if_needed`, `prefix_compact`, `save`, `load`, `find_loaded`, `get_loaded`, `steady_loaded`, and `compare_snapshots`.
 The benchmark also prints internal memory accounting for each phase, including live string payload bytes, arena slack, entry-table bytes, ID-hole overhead, fallback hash bucket/key/node estimates, compact-index bytes, tombstones, and total estimated in-structure bytes. `xcdat` compact-index bytes come from its native byte-count API; `hat-trie` compact-index bytes are estimated from its serialized representation because the library does not expose a direct in-memory byte counter.
+
+You can also expose the compaction policy in the benchmark with:
+
+- `--policy-min-delta-ids N`
+- `--policy-max-delta-fraction F`
+- `--policy-min-tombstone-ids N`
+- `--policy-max-tombstone-fraction F`
+- `--policy-min-delta-bytes N`
+
+The benchmark prints `compaction_state_*` before compaction and `compaction_state_after_compact_*` afterward, including whether `should_compact(policy)` fired. To benchmark the heuristic directly, add `compact_if_needed`:
+
+```sh
+./build-vcpkg/string_bimap_bench \
+  --keys 50000 \
+  --prefix-groups 256 \
+  --profile marisa_array_map \
+  --phases insert,erase,compact_if_needed \
+  --policy-min-delta-ids 1000 \
+  --policy-max-delta-fraction 0.05 \
+  --policy-min-tombstone-ids 1000 \
+  --policy-max-tombstone-fraction 0.02 \
+  --policy-min-delta-bytes 1048576
+```
 
 You can also split serialization and deserialization into separate benchmark runs with `--serialized-file`:
 
