@@ -181,6 +181,13 @@ Useful compact-ID helpers:
 - `can_represent_ids_as<T>()`
 - `compact_id_for(id)` and `by_compact_id(...)`
 
+Membership/access helpers:
+
+- `contains(value)`
+- `contains_id(id)`
+- `try_by_id(id)` / `try_by_compact_id(...)`
+- `at(id)` for checked reverse lookup
+
 It also supports deterministic initialization from common vocabulary file formats:
 
 ```cpp
@@ -196,6 +203,33 @@ Supported inputs:
 - CSV files, by header name or column index
 - JSON arrays of strings, including payloads shaped like the OpenFIGI
   `mapping/values/securityType` response once saved to disk
+
+## Pthash Tool
+
+If `pthash` is enabled, the repo also builds a small CLI utility:
+
+```sh
+./build-pthash/string_bimap_pthash_tool build \
+  --json-array-file /tmp/openfigi-values/securityType.json \
+  --output /tmp/securityType.bin
+
+./build-pthash/string_bimap_pthash_tool dump \
+  --input /tmp/securityType.bin
+
+./build-pthash/string_bimap_pthash_tool stats \
+  --input /tmp/securityType.bin
+
+./build-pthash/string_bimap_pthash_tool lookup \
+  --input /tmp/securityType.bin \
+  --value "Common Stock"
+```
+
+The tool supports:
+
+- `build`: build a `PthashBimap` snapshot from CSV or JSON and write the logical file plus native sidecar
+- `dump`: print stored IDs and values to stdout
+- `stats`: print snapshot size, seed, ID width, and memory estimates
+- `lookup`: resolve a value in an existing snapshot
 
 ## Benchmark
 

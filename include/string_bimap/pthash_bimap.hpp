@@ -583,6 +583,14 @@ public:
 #endif
     }
 
+    [[nodiscard]] bool contains(std::string_view value) const noexcept {
+        return find(value).has_value();
+    }
+
+    [[nodiscard]] bool contains_id(StringId id) const noexcept {
+        return id < size();
+    }
+
     template <class Id>
     [[nodiscard]] std::optional<Id> find_as(std::string_view value) const noexcept {
         static_assert(std::is_integral_v<Id> && std::is_unsigned_v<Id>, "Id must be an unsigned integer");
@@ -627,8 +635,28 @@ public:
         return id < strings_by_id_.size() ? strings_by_id_[id] : std::string_view{};
     }
 
+    [[nodiscard]] std::optional<std::string_view> try_by_id(StringId id) const noexcept {
+        if (!contains_id(id)) {
+            return std::nullopt;
+        }
+        return strings_by_id_[id];
+    }
+
+    [[nodiscard]] std::string_view at(StringId id) const {
+        const auto value = try_by_id(id);
+        if (!value.has_value()) {
+            throw std::out_of_range("PthashBimap id out of range");
+        }
+        return *value;
+    }
+
     [[nodiscard]] std::string_view by_compact_id(const PthashCompactId& id) const noexcept {
         return by_id(widen_compact_id(id));
+    }
+
+    [[nodiscard]] std::optional<std::string_view> try_by_compact_id(
+        const PthashCompactId& id) const noexcept {
+        return try_by_id(widen_compact_id(id));
     }
 
     template <class Id>

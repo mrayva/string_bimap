@@ -35,21 +35,38 @@ void test_basic_lookup_and_reverse() {
     expect(info.width == PthashIdWidth::U8, "id_info should expose width");
     expect(info.width_bytes == 1, "id_info should expose width bytes");
     expect(info.cardinality == values.size(), "id_info should expose cardinality");
+    expect(bimap.contains("ETF"), "contains should report live members");
+    expect(!bimap.contains("missing"), "contains should reject non-members");
+    expect(bimap.contains_id(0), "contains_id should accept dense ids");
+    expect(!bimap.contains_id(9999), "contains_id should reject invalid ids");
 
     for (const auto& value : values) {
         const auto id = bimap.find(value);
         expect(id.has_value(), "live value should resolve to an id");
         expect(bimap.by_id(*id) == value, "reverse lookup should round-trip");
+        expect(bimap.try_by_id(*id).value() == value, "try_by_id should round-trip");
+        expect(bimap.at(*id) == value, "at should round-trip");
         const auto compact = bimap.find_compact(value);
         expect(compact.has_value(), "compact lookup should succeed");
         expect(std::holds_alternative<std::uint8_t>(*compact), "small sets should return uint8 compact ids");
         expect(PthashBimap::widen_compact_id(*compact) == *id, "compact ids should widen losslessly");
         expect(bimap.by_compact_id(*compact) == value, "compact reverse lookup should round-trip");
+        expect(bimap.try_by_compact_id(*compact).value() == value,
+               "try_by_compact_id should round-trip");
     }
 
     expect(!bimap.find("missing").has_value(), "non-members should be rejected");
     expect(bimap.by_id(9999).empty(), "invalid reverse lookup should return empty view");
+    expect(!bimap.try_by_id(9999).has_value(), "try_by_id should reject invalid ids");
     expect(!bimap.compact_id_for(9999).has_value(), "invalid ids should not compact");
+
+    bool threw = false;
+    try {
+        (void)bimap.at(9999);
+    } catch (const std::out_of_range&) {
+        threw = true;
+    }
+    expect(threw, "at should throw on invalid ids");
 }
 
 void test_deterministic_ids_ignore_input_order_and_duplicates() {

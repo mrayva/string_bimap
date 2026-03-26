@@ -136,6 +136,9 @@ if(STRING_BIMAP_BUILD_EXAMPLES)
     if(TARGET PTHASH)
         add_executable(string_bimap_pthash_example examples/pthash_bimap.cpp)
         target_link_libraries(string_bimap_pthash_example PRIVATE string_bimap::string_bimap)
+
+        add_executable(string_bimap_pthash_tool tools/pthash_bimap_tool.cpp)
+        target_link_libraries(string_bimap_pthash_tool PRIVATE string_bimap::string_bimap)
     endif()
 endif()
 
@@ -157,6 +160,10 @@ if(STRING_BIMAP_BUILD_TESTS)
         add_executable(string_bimap_pthash_bimap_test tests/pthash_bimap_test.cpp)
         target_link_libraries(string_bimap_pthash_bimap_test PRIVATE string_bimap::string_bimap)
         add_test(NAME string_bimap_pthash_bimap_test COMMAND string_bimap_pthash_bimap_test)
+
+        add_executable(string_bimap_pthash_tool_test tests/pthash_tool_test.cpp)
+        target_link_libraries(string_bimap_pthash_tool_test PRIVATE string_bimap::string_bimap)
+        add_test(NAME string_bimap_pthash_tool_test COMMAND string_bimap_pthash_tool_test)
     endif()
 endif()
 
