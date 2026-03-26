@@ -18,6 +18,8 @@
 - Added benchmark matrix automation.
 - Added richer internal memory accounting.
 - Added optional `string_bimap::PthashBimap` for deterministic runtime-built static vocabularies backed by `pthash`.
+- Added native file-sidecar persistence for `PthashBimap` so file-based loads can reuse the built MPHF without rebuilding it.
+- Added CSV-column and JSON string-array initialization helpers for `PthashBimap`.
 
 ## 0.1.0
 

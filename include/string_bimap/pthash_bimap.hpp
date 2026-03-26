@@ -4,9 +4,11 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <istream>
 #include <limits>
 #include <optional>
 #include <ostream>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -20,6 +22,7 @@
 #if defined(STRING_BIMAP_HAS_PTHASH)
 #include <xxh3.h>
 
+#include <essentials.hpp>
 #include <pthash.hpp>
 #endif
 
@@ -54,6 +57,10 @@ namespace detail {
 
 inline constexpr std::string_view kPthashFileMagic = "STRBMPH1";
 inline constexpr std::uint32_t kPthashFormatVersion = 1;
+
+inline std::string native_pthash_sidecar_path(const std::string& path) {
+    return path + ".native.pthash";
+}
 
 template <class T>
 inline void write_pod_local(std::ostream& out, const T& value) {
@@ -92,6 +99,269 @@ inline std::string read_string(std::istream& in) {
         throw std::runtime_error("failed to read pthash bimap string");
     }
     return value;
+}
+
+inline std::string trim_ascii(std::string_view value) {
+    std::size_t begin = 0;
+    std::size_t end = value.size();
+    while (begin < end && static_cast<unsigned char>(value[begin]) <= 0x20) {
+        ++begin;
+    }
+    while (end > begin && static_cast<unsigned char>(value[end - 1]) <= 0x20) {
+        --end;
+    }
+    return std::string(value.substr(begin, end - begin));
+}
+
+inline void skip_json_ws(std::istream& in) {
+    while (true) {
+        const int ch = in.peek();
+        if (ch == EOF) {
+            return;
+        }
+        if (static_cast<unsigned char>(ch) > 0x20) {
+            return;
+        }
+        in.get();
+    }
+}
+
+inline std::string parse_json_string(std::istream& in) {
+    if (in.get() != '"') {
+        throw std::runtime_error("expected JSON string");
+    }
+    std::string out;
+    while (true) {
+        const int ch = in.get();
+        if (ch == EOF) {
+            throw std::runtime_error("unterminated JSON string");
+        }
+        if (ch == '"') {
+            return out;
+        }
+        if (ch != '\\') {
+            out.push_back(static_cast<char>(ch));
+            continue;
+        }
+        const int esc = in.get();
+        if (esc == EOF) {
+            throw std::runtime_error("unterminated JSON escape");
+        }
+        switch (esc) {
+            case '"':
+            case '\\':
+            case '/':
+                out.push_back(static_cast<char>(esc));
+                break;
+            case 'b':
+                out.push_back('\b');
+                break;
+            case 'f':
+                out.push_back('\f');
+                break;
+            case 'n':
+                out.push_back('\n');
+                break;
+            case 'r':
+                out.push_back('\r');
+                break;
+            case 't':
+                out.push_back('\t');
+                break;
+            case 'u': {
+                char hex[4];
+                if (!in.read(hex, 4)) {
+                    throw std::runtime_error("invalid JSON unicode escape");
+                }
+                unsigned codepoint = 0;
+                for (char digit : hex) {
+                    codepoint <<= 4;
+                    if (digit >= '0' && digit <= '9') {
+                        codepoint |= static_cast<unsigned>(digit - '0');
+                    } else if (digit >= 'a' && digit <= 'f') {
+                        codepoint |= static_cast<unsigned>(digit - 'a' + 10);
+                    } else if (digit >= 'A' && digit <= 'F') {
+                        codepoint |= static_cast<unsigned>(digit - 'A' + 10);
+                    } else {
+                        throw std::runtime_error("invalid JSON unicode escape");
+                    }
+                }
+                if (codepoint <= 0x7F) {
+                    out.push_back(static_cast<char>(codepoint));
+                } else if (codepoint <= 0x7FF) {
+                    out.push_back(static_cast<char>(0xC0 | (codepoint >> 6)));
+                    out.push_back(static_cast<char>(0x80 | (codepoint & 0x3F)));
+                } else {
+                    out.push_back(static_cast<char>(0xE0 | (codepoint >> 12)));
+                    out.push_back(static_cast<char>(0x80 | ((codepoint >> 6) & 0x3F)));
+                    out.push_back(static_cast<char>(0x80 | (codepoint & 0x3F)));
+                }
+                break;
+            }
+            default:
+                throw std::runtime_error("unsupported JSON escape");
+        }
+    }
+}
+
+inline std::vector<std::string> parse_json_string_array_body(std::istream& in) {
+    std::vector<std::string> values;
+    skip_json_ws(in);
+    if (in.peek() == ']') {
+        in.get();
+        return values;
+    }
+    while (true) {
+        skip_json_ws(in);
+        values.push_back(parse_json_string(in));
+        skip_json_ws(in);
+        const int ch = in.get();
+        if (ch == ']') {
+            break;
+        }
+        if (ch != ',') {
+            throw std::runtime_error("expected ',' or ']' in JSON array");
+        }
+    }
+    return values;
+}
+
+inline std::vector<std::string> parse_json_string_array(std::istream& in) {
+    skip_json_ws(in);
+    const int first = in.peek();
+    if (first == '[') {
+        in.get();
+        auto values = parse_json_string_array_body(in);
+        skip_json_ws(in);
+        if (in.peek() != EOF) {
+            throw std::runtime_error("unexpected trailing bytes after JSON array");
+        }
+        return values;
+    }
+
+    if (first != '{') {
+        throw std::runtime_error("expected JSON array or object");
+    }
+    in.get();
+    while (true) {
+        skip_json_ws(in);
+        if (in.peek() == '}') {
+            break;
+        }
+        const auto key = parse_json_string(in);
+        skip_json_ws(in);
+        if (in.get() != ':') {
+            throw std::runtime_error("expected ':' in JSON object");
+        }
+        skip_json_ws(in);
+        if (key == "values") {
+            if (in.get() != '[') {
+                throw std::runtime_error("expected '[' after values key");
+            }
+            auto values = parse_json_string_array_body(in);
+            skip_json_ws(in);
+            if (in.peek() == ',') {
+                in.get();
+                skip_json_ws(in);
+                if (in.peek() != '}') {
+                    throw std::runtime_error("unexpected extra fields after values array");
+                }
+            }
+            if (in.get() != '}') {
+                throw std::runtime_error("expected closing '}' after values array");
+            }
+            skip_json_ws(in);
+            if (in.peek() != EOF) {
+                throw std::runtime_error("unexpected trailing bytes after JSON object");
+            }
+            return values;
+        }
+        throw std::runtime_error("unsupported JSON object: expected only 'values'");
+    }
+    throw std::runtime_error("JSON object did not contain 'values'");
+}
+
+inline std::vector<std::string> parse_csv_row(std::string_view line) {
+    std::vector<std::string> fields;
+    std::string current;
+    bool in_quotes = false;
+    for (std::size_t i = 0; i < line.size(); ++i) {
+        const char ch = line[i];
+        if (in_quotes) {
+            if (ch == '"') {
+                if (i + 1 < line.size() && line[i + 1] == '"') {
+                    current.push_back('"');
+                    ++i;
+                } else {
+                    in_quotes = false;
+                }
+            } else {
+                current.push_back(ch);
+            }
+            continue;
+        }
+        if (ch == ',') {
+            fields.push_back(std::move(current));
+            current.clear();
+        } else if (ch == '"') {
+            in_quotes = true;
+        } else {
+            current.push_back(ch);
+        }
+    }
+    if (in_quotes) {
+        throw std::runtime_error("unterminated quoted CSV field");
+    }
+    fields.push_back(std::move(current));
+    return fields;
+}
+
+inline std::vector<std::string> parse_csv_column(std::istream& in,
+                                                 std::optional<std::string_view> column_name,
+                                                 std::size_t column_index,
+                                                 bool has_header) {
+    std::vector<std::string> values;
+    std::string line;
+    bool first_line = true;
+    std::size_t resolved_index = column_index;
+
+    while (std::getline(in, line)) {
+        if (!line.empty() && line.back() == '\r') {
+            line.pop_back();
+        }
+        if (line.empty()) {
+            continue;
+        }
+        auto row = parse_csv_row(line);
+        if (first_line && has_header) {
+            if (column_name.has_value()) {
+                bool found = false;
+                for (std::size_t i = 0; i < row.size(); ++i) {
+                    if (trim_ascii(row[i]) == *column_name) {
+                        resolved_index = i;
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    throw std::runtime_error("CSV column name not found");
+                }
+            } else if (resolved_index >= row.size()) {
+                throw std::runtime_error("CSV column index out of range");
+            }
+            first_line = false;
+            continue;
+        }
+        first_line = false;
+        if (resolved_index >= row.size()) {
+            throw std::runtime_error("CSV row is missing requested column");
+        }
+        const auto value = trim_ascii(row[resolved_index]);
+        if (!value.empty()) {
+            values.push_back(value);
+        }
+    }
+    return values;
 }
 
 constexpr PthashIdWidth select_pthash_id_width(std::size_t size) {
@@ -141,6 +411,57 @@ public:
     template <class InputIt>
     PthashBimap(InputIt first, InputIt last, const PthashBuildOptions& options = {}) {
         rebuild(first, last, options);
+    }
+
+    [[nodiscard]] static std::vector<std::string> load_values_from_json_array(std::istream& in) {
+        return detail::parse_json_string_array(in);
+    }
+
+    [[nodiscard]] static std::vector<std::string> load_values_from_json_array_file(const std::string& path) {
+        std::ifstream in(path);
+        if (!in) {
+            throw std::runtime_error("failed to open JSON array file");
+        }
+        return load_values_from_json_array(in);
+    }
+
+    [[nodiscard]] static std::vector<std::string> load_values_from_csv(
+        std::istream& in, std::optional<std::string_view> column_name = std::nullopt,
+        std::size_t column_index = 0, bool has_header = true) {
+        return detail::parse_csv_column(in, column_name, column_index, has_header);
+    }
+
+    [[nodiscard]] static std::vector<std::string> load_values_from_csv_file(
+        const std::string& path, std::optional<std::string_view> column_name = std::nullopt,
+        std::size_t column_index = 0, bool has_header = true) {
+        std::ifstream in(path);
+        if (!in) {
+            throw std::runtime_error("failed to open CSV file");
+        }
+        return load_values_from_csv(in, column_name, column_index, has_header);
+    }
+
+    static PthashBimap from_json_array(std::istream& in, const PthashBuildOptions& options = {}) {
+        return PthashBimap(load_values_from_json_array(in), options);
+    }
+
+    static PthashBimap from_json_array_file(const std::string& path,
+                                            const PthashBuildOptions& options = {}) {
+        return PthashBimap(load_values_from_json_array_file(path), options);
+    }
+
+    static PthashBimap from_csv(std::istream& in, std::optional<std::string_view> column_name = std::nullopt,
+                                std::size_t column_index = 0, bool has_header = true,
+                                const PthashBuildOptions& options = {}) {
+        return PthashBimap(load_values_from_csv(in, column_name, column_index, has_header), options);
+    }
+
+    static PthashBimap from_csv_file(const std::string& path,
+                                     std::optional<std::string_view> column_name = std::nullopt,
+                                     std::size_t column_index = 0, bool has_header = true,
+                                     const PthashBuildOptions& options = {}) {
+        return PthashBimap(load_values_from_csv_file(path, column_name, column_index, has_header),
+                           options);
     }
 
     [[nodiscard]] static constexpr bool available() noexcept {
@@ -301,6 +622,9 @@ public:
             throw std::runtime_error("failed to open pthash bimap output file");
         }
         save(out);
+#if defined(STRING_BIMAP_HAS_PTHASH)
+        save_native_sidecar(path);
+#endif
     }
 
     [[nodiscard]] static PthashBimap load(std::istream& in) {
@@ -339,20 +663,117 @@ public:
         if (!in) {
             throw std::runtime_error("failed to open pthash bimap input file");
         }
-        return load(in);
+        std::string magic(detail::kPthashFileMagic.size(), '\0');
+        in.read(magic.data(), static_cast<std::streamsize>(magic.size()));
+        if (!in || magic != detail::kPthashFileMagic) {
+            throw std::runtime_error("invalid pthash bimap file magic");
+        }
+        const auto version = detail::read_pod_local<std::uint32_t>(in);
+        if (version != detail::kPthashFormatVersion) {
+            throw std::runtime_error("unsupported pthash bimap format version");
+        }
+        const auto stored_width = detail::read_pod_local<std::uint8_t>(in);
+        const auto stored_seed = detail::read_pod_local<std::uint64_t>(in);
+        const auto count = detail::read_pod_local<std::uint32_t>(in);
+
+        std::vector<std::string> values;
+        values.reserve(count);
+        for (std::uint32_t i = 0; i < count; ++i) {
+            values.push_back(detail::read_string(in));
+        }
+
+        PthashBimap bimap;
+        bimap.strings_by_id_ = std::move(values);
+        bimap.id_width_ = static_cast<PthashIdWidth>(stored_width);
+        bimap.seed_ = stored_seed;
+
+#if defined(STRING_BIMAP_HAS_PTHASH)
+        if (!bimap.try_load_native_sidecar(path)) {
+            PthashBuildOptions options;
+            options.initial_seed = stored_seed;
+            options.max_seed_attempts = 1;
+            bimap.build_from_id_order_strings(options);
+        }
+#else
+        (void)path;
+        throw std::logic_error("PthashBimap requires STRING_BIMAP_HAS_PTHASH");
+#endif
+
+        if (static_cast<std::uint8_t>(bimap.id_width_) != stored_width) {
+            throw std::runtime_error("pthash bimap id-width mismatch during load");
+        }
+        return bimap;
     }
 
 private:
 #if defined(STRING_BIMAP_HAS_PTHASH)
-    void build_from_values(const std::vector<std::string>& values, const PthashBuildOptions& options) {
-        std::vector<std::string> canonical(values.begin(), values.end());
+    void save_native_sidecar(const std::string& path) const {
+        if (strings_by_id_.empty()) {
+            std::error_code ec;
+            std::filesystem::remove(detail::native_pthash_sidecar_path(path), ec);
+            return;
+        }
+        essentials::save(mphf_, detail::native_pthash_sidecar_path(path).c_str());
+    }
+
+    [[nodiscard]] bool try_load_native_sidecar(const std::string& path) {
+        const auto sidecar = detail::native_pthash_sidecar_path(path);
+        if (!std::filesystem::exists(sidecar)) {
+            return false;
+        }
+        detail::PthashFunction loaded;
+        essentials::load(loaded, sidecar.c_str());
+        if (loaded.num_keys() != strings_by_id_.size()) {
+            return false;
+        }
+        mphf_ = std::move(loaded);
+        return validate_loaded_native_index();
+    }
+
+    [[nodiscard]] bool validate_loaded_native_index() const {
+        if (strings_by_id_.empty()) {
+            return true;
+        }
+        for (std::size_t id = 0; id < strings_by_id_.size(); ++id) {
+            const auto candidate = static_cast<std::size_t>(mphf_(strings_by_id_[id]));
+            if (candidate != id) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    void build_from_id_order_strings(const PthashBuildOptions& options) {
+        if (strings_by_id_.empty()) {
+            mphf_ = detail::PthashFunction{};
+            id_width_ = PthashIdWidth::U8;
+            seed_ = options.initial_seed;
+            return;
+        }
+        std::vector<std::string> canonical = strings_by_id_;
         std::sort(canonical.begin(), canonical.end());
         canonical.erase(std::unique(canonical.begin(), canonical.end()), canonical.end());
+        if (canonical.size() != strings_by_id_.size()) {
+            throw std::runtime_error("stored pthash bimap strings are not unique");
+        }
+        build_native_index(canonical, options);
 
-        strings_by_id_.clear();
+        std::vector<std::string> reordered(strings_by_id_.size());
+        for (const auto& value : canonical) {
+            const auto id = static_cast<std::size_t>(mphf_(value));
+            if (id >= reordered.size()) {
+                throw std::runtime_error("pthash produced out-of-range id");
+            }
+            reordered[id] = value;
+        }
+        if (reordered != strings_by_id_) {
+            throw std::runtime_error("stored pthash bimap strings do not match deterministic ids");
+        }
+    }
+
+    void build_native_index(const std::vector<std::string>& canonical, const PthashBuildOptions& options) {
         seed_ = options.initial_seed;
         id_width_ = detail::select_pthash_id_width(canonical.size());
-
         if (canonical.empty()) {
             mphf_ = detail::PthashFunction{};
             return;
@@ -381,6 +802,15 @@ private:
         if (!built) {
             throw std::runtime_error("failed to build deterministic pthash function");
         }
+    }
+
+    void build_from_values(const std::vector<std::string>& values, const PthashBuildOptions& options) {
+        std::vector<std::string> canonical(values.begin(), values.end());
+        std::sort(canonical.begin(), canonical.end());
+        canonical.erase(std::unique(canonical.begin(), canonical.end()), canonical.end());
+
+        strings_by_id_.clear();
+        build_native_index(canonical, options);
 
         strings_by_id_.assign(canonical.size(), std::string{});
         std::vector<bool> assigned(canonical.size(), false);

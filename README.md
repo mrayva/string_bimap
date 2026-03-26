@@ -163,7 +163,30 @@ std::string_view value = bimap.by_id(*id);
 ```
 
 The class also supports logical `save()` / `load()` round-trips. The serialized
-form stores the chosen seed and rebuilds the MPHF deterministically on load.
+form stores the chosen seed and rebuilds the MPHF deterministically on stream load.
+
+For file-based persistence, `save(path)` also writes a native `pthash` sidecar:
+
+- `path + ".native.pthash"`
+
+and `load(path)` prefers that native sidecar before falling back to deterministic
+rebuild from the logical main file.
+
+It also supports deterministic initialization from common vocabulary file formats:
+
+```cpp
+auto csv_bimap = string_bimap::PthashBimap::from_csv_file(
+    "/tmp/CUSIP.csv", "description");
+
+auto json_bimap = string_bimap::PthashBimap::from_json_array_file(
+    "/tmp/securityType.json");
+```
+
+Supported inputs:
+
+- CSV files, by header name or column index
+- JSON arrays of strings, including payloads shaped like the OpenFIGI
+  `mapping/values/securityType` response once saved to disk
 
 ## Benchmark
 
@@ -202,6 +225,21 @@ The summary script emits:
 
 - `bench/results/summary.csv`
 - `bench/results/summary.md`
+
+If `pthash` is enabled, there is also a dedicated static-vocabulary benchmark:
+
+```sh
+./bench/fetch_openfigi_values.sh /tmp/openfigi-values
+./build-pthash/string_bimap_pthash_bench --json-array-file /tmp/openfigi-values/securityType.json
+./build-pthash/string_bimap_pthash_bench --json-array-file /tmp/openfigi-values/securityType2.json
+./build-pthash/string_bimap_pthash_bench --json-array-file /tmp/openfigi-values/exchCode.json
+```
+
+That benchmark compares:
+
+- `PthashBimap`
+- sorted vector + binary search
+- `std::unordered_map`
 
 ## Current Read
 

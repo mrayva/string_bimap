@@ -24,5 +24,9 @@ int main() {
         std::cout << *id << " -> " << bimap.by_id(*id) << '\n';
     }
 
+    std::cout << "csv/json loaders available via "
+              << "PthashBimap::from_csv_file(...) and "
+              << "PthashBimap::from_json_array_file(...)\n";
+
     return 0;
 }
