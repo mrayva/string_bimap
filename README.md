@@ -213,6 +213,11 @@ If `pthash` is enabled, the repo also builds a small CLI utility:
   --json-array-file /tmp/openfigi-values/securityType.json \
   --output /tmp/securityType.bin
 
+printf '%s' '["Bond","Common Stock","ETF"]' | \
+  ./build-pthash/string_bimap_pthash_tool build \
+    --json-array-file - \
+    --output /tmp/securityType-stdin.bin
+
 ./build-pthash/string_bimap_pthash_tool dump \
   --input /tmp/securityType.bin
 
@@ -230,6 +235,7 @@ The tool supports:
 - `dump`: print stored IDs and values to stdout
 - `stats`: print snapshot size, seed, ID width, and memory estimates
 - `lookup`: resolve a value in an existing snapshot
+- pass `-` to `--json-array-file` or `--csv-file` to read from stdin
 
 ## Benchmark
 

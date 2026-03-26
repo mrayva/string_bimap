@@ -67,9 +67,20 @@ InputSpec parse_input_spec(int& i, int argc, char** argv) {
 PthashBimap build_from_spec(const InputSpec& spec) {
     PthashBuildOptions options;
     if (!spec.json_array_file.empty()) {
+        if (spec.json_array_file == "-") {
+            return PthashBimap::from_json_array(std::cin, options);
+        }
         return PthashBimap::from_json_array_file(spec.json_array_file, options);
     }
     if (!spec.csv_file.empty()) {
+        if (spec.csv_file == "-") {
+            if (!spec.csv_column.empty()) {
+                return PthashBimap::from_csv(std::cin, spec.csv_column, spec.csv_index,
+                                             spec.csv_has_header, options);
+            }
+            return PthashBimap::from_csv(std::cin, std::nullopt, spec.csv_index, spec.csv_has_header,
+                                         options);
+        }
         if (!spec.csv_column.empty()) {
             return PthashBimap::from_csv_file(spec.csv_file, spec.csv_column, spec.csv_index,
                                               spec.csv_has_header, options);

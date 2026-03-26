@@ -63,9 +63,27 @@ void test_tool_build_dump_lookup() {
     std::filesystem::remove(sidecar_path);
 }
 
+void test_tool_build_from_stdin() {
+    const std::string snapshot_path = "/tmp/pthash_tool_stdin.bin";
+    const std::string sidecar_path = snapshot_path + ".native.pthash";
+    std::filesystem::remove(snapshot_path);
+    std::filesystem::remove(sidecar_path);
+
+    const auto build_out = run_command(
+        "printf '%s' '[\"Bond\",\"Common Stock\",\"ETF\"]' | "
+        "./string_bimap_pthash_tool build --json-array-file - --output " + snapshot_path);
+    expect(build_out.find("size=3") != std::string::npos, "stdin build should report cardinality");
+    expect(std::filesystem::exists(snapshot_path), "stdin build should write snapshot");
+    expect(std::filesystem::exists(sidecar_path), "stdin build should write native sidecar");
+
+    std::filesystem::remove(snapshot_path);
+    std::filesystem::remove(sidecar_path);
+}
+
 }  // namespace
 
 int main() {
     test_tool_build_dump_lookup();
+    test_tool_build_from_stdin();
     return 0;
 }
