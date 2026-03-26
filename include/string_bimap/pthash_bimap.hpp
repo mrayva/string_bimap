@@ -53,6 +53,13 @@ struct PthashBimapMemoryUsage {
     }
 };
 
+struct PthashIdInfo {
+    PthashIdWidth width = PthashIdWidth::U8;
+    std::size_t width_bytes = 1;
+    std::uint32_t max_dense_id = 0;
+    std::size_t cardinality = 0;
+};
+
 namespace detail {
 
 inline constexpr std::string_view kPthashFileMagic = "STRBMPH1";
@@ -522,8 +529,39 @@ public:
         return static_cast<std::size_t>(id_width_);
     }
 
+    [[nodiscard]] PthashIdInfo id_info() const noexcept {
+        return PthashIdInfo{
+            id_width_,
+            id_width_bytes(),
+            max_id(),
+            size(),
+        };
+    }
+
+    [[nodiscard]] bool fits_in_uint8() const noexcept {
+        return id_width_ == PthashIdWidth::U8;
+    }
+
+    [[nodiscard]] bool fits_in_uint16() const noexcept {
+        return id_width_ == PthashIdWidth::U8 || id_width_ == PthashIdWidth::U16;
+    }
+
+    [[nodiscard]] bool fits_in_uint32() const noexcept {
+        return true;
+    }
+
+    template <class Id>
+    [[nodiscard]] bool can_represent_ids_as() const noexcept {
+        static_assert(std::is_integral_v<Id> && std::is_unsigned_v<Id>, "Id must be an unsigned integer");
+        return size() <= static_cast<std::size_t>(std::numeric_limits<Id>::max()) + 1ULL;
+    }
+
     [[nodiscard]] std::uint64_t seed() const noexcept {
         return seed_;
+    }
+
+    [[nodiscard]] std::uint32_t max_id() const noexcept {
+        return empty() ? 0U : static_cast<std::uint32_t>(size() - 1U);
     }
 
     [[nodiscard]] std::optional<StringId> find(std::string_view value) const noexcept {
@@ -563,19 +601,34 @@ public:
         if (!id.has_value()) {
             return std::nullopt;
         }
+        return compact_id_for(*id);
+    }
+
+    [[nodiscard]] std::optional<PthashCompactId> compact_id_for(StringId id) const noexcept {
+        if (id >= size()) {
+            return std::nullopt;
+        }
         switch (id_width_) {
             case PthashIdWidth::U8:
-                return PthashCompactId{static_cast<std::uint8_t>(*id)};
+                return PthashCompactId{static_cast<std::uint8_t>(id)};
             case PthashIdWidth::U16:
-                return PthashCompactId{static_cast<std::uint16_t>(*id)};
+                return PthashCompactId{static_cast<std::uint16_t>(id)};
             case PthashIdWidth::U32:
-                return PthashCompactId{static_cast<std::uint32_t>(*id)};
+                return PthashCompactId{static_cast<std::uint32_t>(id)};
         }
         return std::nullopt;
     }
 
+    [[nodiscard]] static StringId widen_compact_id(const PthashCompactId& id) noexcept {
+        return std::visit([](auto value) { return static_cast<StringId>(value); }, id);
+    }
+
     [[nodiscard]] std::string_view by_id(StringId id) const noexcept {
         return id < strings_by_id_.size() ? strings_by_id_[id] : std::string_view{};
+    }
+
+    [[nodiscard]] std::string_view by_compact_id(const PthashCompactId& id) const noexcept {
+        return by_id(widen_compact_id(id));
     }
 
     template <class Id>

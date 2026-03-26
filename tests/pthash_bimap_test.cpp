@@ -26,6 +26,15 @@ void test_basic_lookup_and_reverse() {
     expect(!bimap.empty(), "pthash bimap should build");
     expect(bimap.size() == values.size(), "pthash bimap should preserve cardinality");
     expect(bimap.id_width() == PthashIdWidth::U8, "small sets should use uint8 ids");
+    expect(bimap.fits_in_uint8(), "small sets should report uint8 fit");
+    expect(bimap.fits_in_uint16(), "small sets should report uint16 fit");
+    expect(bimap.can_represent_ids_as<std::uint8_t>(), "small sets should fit in uint8_t");
+    expect(bimap.max_id() == values.size() - 1, "max_id should match dense cardinality");
+
+    const auto info = bimap.id_info();
+    expect(info.width == PthashIdWidth::U8, "id_info should expose width");
+    expect(info.width_bytes == 1, "id_info should expose width bytes");
+    expect(info.cardinality == values.size(), "id_info should expose cardinality");
 
     for (const auto& value : values) {
         const auto id = bimap.find(value);
@@ -34,10 +43,13 @@ void test_basic_lookup_and_reverse() {
         const auto compact = bimap.find_compact(value);
         expect(compact.has_value(), "compact lookup should succeed");
         expect(std::holds_alternative<std::uint8_t>(*compact), "small sets should return uint8 compact ids");
+        expect(PthashBimap::widen_compact_id(*compact) == *id, "compact ids should widen losslessly");
+        expect(bimap.by_compact_id(*compact) == value, "compact reverse lookup should round-trip");
     }
 
     expect(!bimap.find("missing").has_value(), "non-members should be rejected");
     expect(bimap.by_id(9999).empty(), "invalid reverse lookup should return empty view");
+    expect(!bimap.compact_id_for(9999).has_value(), "invalid ids should not compact");
 }
 
 void test_deterministic_ids_ignore_input_order_and_duplicates() {
@@ -88,10 +100,16 @@ void test_find_as_and_round_trip_persistence() {
 
     PthashBimap built(values, options);
     expect(built.id_width() == PthashIdWidth::U16, "300 values should use uint16 ids");
+    expect(!built.fits_in_uint8(), "300 values should not fit in uint8");
+    expect(built.fits_in_uint16(), "300 values should fit in uint16");
+    expect(built.can_represent_ids_as<std::uint16_t>(), "300 values should fit in uint16_t");
 
     const auto compact_id = built.find_as<std::uint16_t>("key_42");
     expect(compact_id.has_value(), "typed lookup should succeed");
     expect(built.by_id(*compact_id) == "key_42", "typed reverse lookup should round-trip");
+    const auto compact_variant = built.compact_id_for(*compact_id);
+    expect(compact_variant.has_value(), "compact_id_for should succeed");
+    expect(std::holds_alternative<std::uint16_t>(*compact_variant), "300 values should yield uint16 compact ids");
 
     std::stringstream buffer(std::ios::in | std::ios::out | std::ios::binary);
     built.save(buffer);

@@ -160,6 +160,7 @@ string_bimap::PthashBimap bimap(values);
 auto id = bimap.find("ETF");
 auto compact = bimap.find_compact("ETF");
 std::string_view value = bimap.by_id(*id);
+auto info = bimap.id_info();
 ```
 
 The class also supports logical `save()` / `load()` round-trips. The serialized
@@ -171,6 +172,14 @@ For file-based persistence, `save(path)` also writes a native `pthash` sidecar:
 
 and `load(path)` prefers that native sidecar before falling back to deterministic
 rebuild from the logical main file.
+
+Useful compact-ID helpers:
+
+- `id_width()`, `id_width_bytes()`
+- `id_info()`
+- `fits_in_uint8()`, `fits_in_uint16()`
+- `can_represent_ids_as<T>()`
+- `compact_id_for(id)` and `by_compact_id(...)`
 
 It also supports deterministic initialization from common vocabulary file formats:
 
