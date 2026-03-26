@@ -7,6 +7,7 @@ Header-only C++17 string dictionary for:
 - live iteration and prefix scans
 - mostly-static datasets with a mutable overlay
 - binary save/load with stable IDs preserved
+- deterministic runtime-built static bimaps for fixed vocabularies
 
 ## Profiles
 
@@ -88,6 +89,7 @@ Optional backends:
 - `marisa.h` + `libmarisa` enable `CompactMemoryMarisa`
 - `tsl/htrie_map.h` enables compact-profile trie prefix indexing
 - `tsl/array_map.h` enables `FastLookupArrayMap` and `CompactMemoryMarisaArrayMap`
+- a local `pthash` checkout enables `string_bimap::PthashBimap`
 
 For `array-hash`, point CMake at a local checkout if needed:
 
@@ -95,6 +97,17 @@ For `array-hash`, point CMake at a local checkout if needed:
 cmake -S . -B build-array \
   -DSTRING_BIMAP_USE_ARRAY_HASH=ON \
   -DSTRING_BIMAP_ARRAY_HASH_ROOT=/path/to/array-hash
+```
+
+For `pthash`, point CMake at a local checkout with hydrated submodules:
+
+```sh
+git -C /path/to/pthash submodule update --init --recursive
+cmake -S . -B build-pthash \
+  -DSTRING_BIMAP_USE_PTHASH=ON \
+  -DSTRING_BIMAP_PTHASH_ROOT=/path/to/pthash
+cmake --build build-pthash
+ctest --test-dir build-pthash --output-on-failure
 ```
 
 ## Build With vcpkg
@@ -110,6 +123,47 @@ cmake -S . -B build-vcpkg \
 cmake --build build-vcpkg
 ctest --test-dir build-vcpkg --output-on-failure
 ```
+
+## PthashBimap
+
+`string_bimap::PthashBimap` is a separate static bimap for small or medium fixed
+string vocabularies when:
+
+- startup is rare
+- `string -> id` lookup speed matters more than build time
+- you want deterministic dense IDs without compile-time enums
+
+Properties:
+
+- canonicalizes input by sorting and deduplicating it
+- builds a deterministic runtime MPHF with `pthash`
+- assigns the same dense IDs for the same string set on every session build
+- adapts the compact ID width to `uint8_t`, `uint16_t`, or `uint32_t`
+- verifies membership by checking `id_to_string[id] == key`
+
+Example:
+
+```cpp
+#include <string_bimap/pthash_bimap.hpp>
+
+std::vector<std::string> values = {
+    "Bond",
+    "Common Stock",
+    "Depositary Receipt",
+    "ETF",
+    "Mutual Fund",
+    "RIGHT",
+};
+
+string_bimap::PthashBimap bimap(values);
+
+auto id = bimap.find("ETF");
+auto compact = bimap.find_compact("ETF");
+std::string_view value = bimap.by_id(*id);
+```
+
+The class also supports logical `save()` / `load()` round-trips. The serialized
+form stores the chosen seed and rebuilds the MPHF deterministically on load.
 
 ## Benchmark
 

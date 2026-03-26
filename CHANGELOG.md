@@ -17,6 +17,7 @@
 - Split the old monolithic smoke test into focused core, persistence, and query tests.
 - Added benchmark matrix automation.
 - Added richer internal memory accounting.
+- Added optional `string_bimap::PthashBimap` for deterministic runtime-built static vocabularies backed by `pthash`.
 
 ## 0.1.0
 

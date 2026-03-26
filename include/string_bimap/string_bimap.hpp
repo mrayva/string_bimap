@@ -583,3 +583,5 @@ private:
 };
 
 }  // namespace string_bimap
+
+#include "pthash_bimap.hpp"
