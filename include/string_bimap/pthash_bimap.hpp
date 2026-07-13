@@ -20,7 +20,9 @@
 #include "types.hpp"
 
 #if defined(STRING_BIMAP_HAS_PTHASH)
+#if !defined(STRING_BIMAP_PTHASH_V2)
 #include <xxh3.h>
+#endif
 
 #include <essentials.hpp>
 #include <pthash.hpp>
@@ -63,7 +65,12 @@ struct PthashIdInfo {
 namespace detail {
 
 inline constexpr std::string_view kPthashFileMagic = "STRBMPH1";
-inline constexpr std::uint32_t kPthashFormatVersion = 1;
+inline constexpr std::uint32_t kPthashFormatVersion = 2;
+#if defined(STRING_BIMAP_PTHASH_V2)
+inline constexpr std::uint8_t kPthashHashAlgorithm = 2;
+#else
+inline constexpr std::uint8_t kPthashHashAlgorithm = 1;
+#endif
 
 inline std::string native_pthash_sidecar_path(const std::string& path) {
     return path + ".native.pthash";
@@ -90,6 +97,9 @@ inline T read_pod_local(std::istream& in) {
 }
 
 inline void write_string(std::ostream& out, std::string_view value) {
+    if (value.size() > std::numeric_limits<std::uint32_t>::max()) {
+        throw std::length_error("pthash bimap string exceeds the file format limit");
+    }
     const auto length = static_cast<std::uint32_t>(value.size());
     write_pod_local(out, length);
     out.write(value.data(), static_cast<std::streamsize>(value.size()));
@@ -133,6 +143,45 @@ inline void skip_json_ws(std::istream& in) {
     }
 }
 
+inline unsigned read_json_hex_quad(std::istream& in) {
+    char hex[4];
+    if (!in.read(hex, 4)) {
+        throw std::runtime_error("invalid JSON unicode escape");
+    }
+    unsigned value = 0;
+    for (char digit : hex) {
+        value <<= 4;
+        if (digit >= '0' && digit <= '9') {
+            value |= static_cast<unsigned>(digit - '0');
+        } else if (digit >= 'a' && digit <= 'f') {
+            value |= static_cast<unsigned>(digit - 'a' + 10);
+        } else if (digit >= 'A' && digit <= 'F') {
+            value |= static_cast<unsigned>(digit - 'A' + 10);
+        } else {
+            throw std::runtime_error("invalid JSON unicode escape");
+        }
+    }
+    return value;
+}
+
+inline void append_utf8(std::string& out, unsigned codepoint) {
+    if (codepoint <= 0x7F) {
+        out.push_back(static_cast<char>(codepoint));
+    } else if (codepoint <= 0x7FF) {
+        out.push_back(static_cast<char>(0xC0 | (codepoint >> 6)));
+        out.push_back(static_cast<char>(0x80 | (codepoint & 0x3F)));
+    } else if (codepoint <= 0xFFFF) {
+        out.push_back(static_cast<char>(0xE0 | (codepoint >> 12)));
+        out.push_back(static_cast<char>(0x80 | ((codepoint >> 6) & 0x3F)));
+        out.push_back(static_cast<char>(0x80 | (codepoint & 0x3F)));
+    } else {
+        out.push_back(static_cast<char>(0xF0 | (codepoint >> 18)));
+        out.push_back(static_cast<char>(0x80 | ((codepoint >> 12) & 0x3F)));
+        out.push_back(static_cast<char>(0x80 | ((codepoint >> 6) & 0x3F)));
+        out.push_back(static_cast<char>(0x80 | (codepoint & 0x3F)));
+    }
+}
+
 inline std::string parse_json_string(std::istream& in) {
     if (in.get() != '"') {
         throw std::runtime_error("expected JSON string");
@@ -147,6 +196,9 @@ inline std::string parse_json_string(std::istream& in) {
             return out;
         }
         if (ch != '\\') {
+            if (static_cast<unsigned char>(ch) < 0x20) {
+                throw std::runtime_error("unescaped control character in JSON string");
+            }
             out.push_back(static_cast<char>(ch));
             continue;
         }
@@ -176,33 +228,20 @@ inline std::string parse_json_string(std::istream& in) {
                 out.push_back('\t');
                 break;
             case 'u': {
-                char hex[4];
-                if (!in.read(hex, 4)) {
-                    throw std::runtime_error("invalid JSON unicode escape");
-                }
-                unsigned codepoint = 0;
-                for (char digit : hex) {
-                    codepoint <<= 4;
-                    if (digit >= '0' && digit <= '9') {
-                        codepoint |= static_cast<unsigned>(digit - '0');
-                    } else if (digit >= 'a' && digit <= 'f') {
-                        codepoint |= static_cast<unsigned>(digit - 'a' + 10);
-                    } else if (digit >= 'A' && digit <= 'F') {
-                        codepoint |= static_cast<unsigned>(digit - 'A' + 10);
-                    } else {
-                        throw std::runtime_error("invalid JSON unicode escape");
+                unsigned codepoint = read_json_hex_quad(in);
+                if (codepoint >= 0xD800 && codepoint <= 0xDBFF) {
+                    if (in.get() != '\\' || in.get() != 'u') {
+                        throw std::runtime_error("JSON high surrogate is missing a low surrogate");
                     }
+                    const unsigned low = read_json_hex_quad(in);
+                    if (low < 0xDC00 || low > 0xDFFF) {
+                        throw std::runtime_error("invalid JSON low surrogate");
+                    }
+                    codepoint = 0x10000 + ((codepoint - 0xD800) << 10) + (low - 0xDC00);
+                } else if (codepoint >= 0xDC00 && codepoint <= 0xDFFF) {
+                    throw std::runtime_error("unexpected JSON low surrogate");
                 }
-                if (codepoint <= 0x7F) {
-                    out.push_back(static_cast<char>(codepoint));
-                } else if (codepoint <= 0x7FF) {
-                    out.push_back(static_cast<char>(0xC0 | (codepoint >> 6)));
-                    out.push_back(static_cast<char>(0x80 | (codepoint & 0x3F)));
-                } else {
-                    out.push_back(static_cast<char>(0xE0 | (codepoint >> 12)));
-                    out.push_back(static_cast<char>(0x80 | ((codepoint >> 6) & 0x3F)));
-                    out.push_back(static_cast<char>(0x80 | (codepoint & 0x3F)));
-                }
+                append_utf8(out, codepoint);
                 break;
             }
             default:
@@ -382,6 +421,23 @@ constexpr PthashIdWidth select_pthash_id_width(std::size_t size) {
 }
 
 #if defined(STRING_BIMAP_HAS_PTHASH)
+#if defined(STRING_BIMAP_PTHASH_V2)
+struct pthash_string_view_hash_128 {
+    using hash_type = pthash::hash128;
+
+    static inline hash_type hash(std::string_view value, std::uint64_t seed) {
+        return {pthash::MurmurHash2_64(value.data(), value.size(), seed),
+                pthash::MurmurHash2_64(value.data(), value.size(), ~seed)};
+    }
+
+    static inline hash_type hash(const std::string& value, std::uint64_t seed) {
+        return hash(std::string_view(value), seed);
+    }
+};
+
+using PthashFunction =
+    pthash::single_phf<pthash_string_view_hash_128, pthash::dictionary_dictionary, true>;
+#else
 struct pthash_string_view_xxhash_128 {
     using hash_type = pthash::hash128;
 
@@ -397,6 +453,7 @@ struct pthash_string_view_xxhash_128 {
 using PthashFunction =
     pthash::single_phf<pthash_string_view_xxhash_128, pthash::range_bucketer,
                        pthash::dictionary_dictionary, true>;
+#endif
 #endif
 
 }  // namespace detail
@@ -553,7 +610,11 @@ public:
     template <class Id>
     [[nodiscard]] bool can_represent_ids_as() const noexcept {
         static_assert(std::is_integral_v<Id> && std::is_unsigned_v<Id>, "Id must be an unsigned integer");
-        return size() <= static_cast<std::size_t>(std::numeric_limits<Id>::max()) + 1ULL;
+        if constexpr (sizeof(Id) >= sizeof(std::size_t)) {
+            return true;
+        } else {
+            return size() <= static_cast<std::size_t>(std::numeric_limits<Id>::max()) + 1U;
+        }
     }
 
     [[nodiscard]] std::uint64_t seed() const noexcept {
@@ -572,14 +633,14 @@ public:
         if (strings_by_id_.empty()) {
             return std::nullopt;
         }
-        const auto candidate = static_cast<StringId>(mphf_(value));
+        const auto candidate = mphf_(value);
         if (candidate >= strings_by_id_.size()) {
             return std::nullopt;
         }
         if (strings_by_id_[candidate] != value) {
             return std::nullopt;
         }
-        return candidate;
+        return static_cast<StringId>(candidate);
 #endif
     }
 
@@ -683,12 +744,16 @@ public:
     }
 
     void save(std::ostream& out) const {
+        if (strings_by_id_.size() > std::numeric_limits<std::uint32_t>::max()) {
+            throw std::length_error("pthash bimap exceeds the file format cardinality limit");
+        }
         out.write(detail::kPthashFileMagic.data(),
                   static_cast<std::streamsize>(detail::kPthashFileMagic.size()));
         if (!out) {
             throw std::runtime_error("failed to write pthash bimap magic");
         }
         detail::write_pod_local(out, detail::kPthashFormatVersion);
+        detail::write_pod_local(out, detail::kPthashHashAlgorithm);
         detail::write_pod_local(out, static_cast<std::uint8_t>(id_width_));
         detail::write_pod_local(out, seed_);
         detail::write_pod_local(out, static_cast<std::uint32_t>(strings_by_id_.size()));
@@ -718,7 +783,11 @@ public:
         if (version != detail::kPthashFormatVersion) {
             throw std::runtime_error("unsupported pthash bimap format version");
         }
+        if (detail::read_pod_local<std::uint8_t>(in) != detail::kPthashHashAlgorithm) {
+            throw std::runtime_error("incompatible pthash bimap hash algorithm");
+        }
         const auto stored_width = detail::read_pod_local<std::uint8_t>(in);
+        validate_stored_width(stored_width);
         const auto stored_seed = detail::read_pod_local<std::uint64_t>(in);
         const auto count = detail::read_pod_local<std::uint32_t>(in);
 
@@ -753,7 +822,11 @@ public:
         if (version != detail::kPthashFormatVersion) {
             throw std::runtime_error("unsupported pthash bimap format version");
         }
+        if (detail::read_pod_local<std::uint8_t>(in) != detail::kPthashHashAlgorithm) {
+            throw std::runtime_error("incompatible pthash bimap hash algorithm");
+        }
         const auto stored_width = detail::read_pod_local<std::uint8_t>(in);
+        validate_stored_width(stored_width);
         const auto stored_seed = detail::read_pod_local<std::uint64_t>(in);
         const auto count = detail::read_pod_local<std::uint32_t>(in);
 
@@ -787,6 +860,14 @@ public:
     }
 
 private:
+    static void validate_stored_width(std::uint8_t width) {
+        if (width != static_cast<std::uint8_t>(PthashIdWidth::U8) &&
+            width != static_cast<std::uint8_t>(PthashIdWidth::U16) &&
+            width != static_cast<std::uint8_t>(PthashIdWidth::U32)) {
+            throw std::runtime_error("invalid pthash bimap id width");
+        }
+    }
+
 #if defined(STRING_BIMAP_HAS_PTHASH)
     void save_native_sidecar(const std::string& path) const {
         if (strings_by_id_.empty()) {
@@ -803,7 +884,11 @@ private:
             return false;
         }
         detail::PthashFunction loaded;
-        essentials::load(loaded, sidecar.c_str());
+        try {
+            essentials::load(loaded, sidecar.c_str());
+        } catch (...) {
+            return false;
+        }
         if (loaded.num_keys() != strings_by_id_.size()) {
             return false;
         }
@@ -861,9 +946,16 @@ private:
         }
 
         pthash::build_configuration config;
+#if defined(STRING_BIMAP_PTHASH_V2)
+        config.c = options.lambda;
+        config.alpha = 0.98;
+        config.minimal_output = true;
+        config.verbose_output = false;
+#else
         config.lambda = options.lambda;
         config.minimal = true;
         config.verbose = false;
+#endif
         config.num_threads = 1;
 
         bool built = false;
@@ -889,6 +981,7 @@ private:
         std::vector<std::string> canonical(values.begin(), values.end());
         std::sort(canonical.begin(), canonical.end());
         canonical.erase(std::unique(canonical.begin(), canonical.end()), canonical.end());
+        canonical.erase(std::remove(canonical.begin(), canonical.end(), std::string{}), canonical.end());
 
         strings_by_id_.clear();
         build_native_index(canonical, options);

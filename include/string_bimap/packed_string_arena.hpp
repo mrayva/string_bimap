@@ -65,6 +65,17 @@ public:
         bytes_ = std::move(bytes);
     }
 
+    [[nodiscard]] static bool valid_location(const EntryLocation& location,
+                                             const std::vector<char>& bytes) noexcept {
+        if (!location.live()) {
+            return location.length == 0;
+        }
+        const auto offset = static_cast<std::size_t>(location.offset);
+        const auto length = static_cast<std::size_t>(location.length);
+        return offset < bytes.size() && length < bytes.size() - offset &&
+               bytes[offset + length] == '\0';
+    }
+
     void clear(std::size_t reserve_bytes = 0) {
         bytes_.clear();
         bytes_.reserve(reserve_bytes + 1);

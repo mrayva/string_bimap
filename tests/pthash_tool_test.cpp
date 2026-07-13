@@ -10,6 +10,8 @@ namespace {
 
 using string_bimap_test::expect;
 
+std::string tool_path;
+
 std::string run_command(const std::string& command) {
     std::array<char, 256> buffer{};
     std::string output;
@@ -41,18 +43,18 @@ void test_tool_build_dump_lookup() {
     std::filesystem::remove(sidecar_path);
 
     const auto build_out =
-        run_command("./string_bimap_pthash_tool build --json-array-file " + json_path +
+        run_command(tool_path + " build --json-array-file " + json_path +
                     " --output " + snapshot_path);
     expect(build_out.find("size=3") != std::string::npos, "tool build should report cardinality");
     expect(std::filesystem::exists(snapshot_path), "tool build should write snapshot");
     expect(std::filesystem::exists(sidecar_path), "tool build should write native sidecar");
 
     const auto dump_out =
-        run_command("./string_bimap_pthash_tool dump --input " + snapshot_path);
+        run_command(tool_path + " dump --input " + snapshot_path);
     expect(dump_out.find("Bond") != std::string::npos, "tool dump should print values");
     expect(dump_out.find("Common Stock") != std::string::npos, "tool dump should print all rows");
 
-    const auto lookup_out = run_command("./string_bimap_pthash_tool lookup --input " +
+    const auto lookup_out = run_command(tool_path + " lookup --input " +
                                         snapshot_path + " --value \"Common Stock\"");
     expect(lookup_out.find("found=true") != std::string::npos, "tool lookup should resolve members");
     expect(lookup_out.find("value=Common Stock") != std::string::npos,
@@ -70,8 +72,8 @@ void test_tool_build_from_stdin() {
     std::filesystem::remove(sidecar_path);
 
     const auto build_out = run_command(
-        "printf '%s' '[\"Bond\",\"Common Stock\",\"ETF\"]' | "
-        "./string_bimap_pthash_tool build --json-array-file - --output " + snapshot_path);
+        std::string("printf '%s' '[\"Bond\",\"Common Stock\",\"ETF\"]' | ") +
+        tool_path + " build --json-array-file - --output " + snapshot_path);
     expect(build_out.find("size=3") != std::string::npos, "stdin build should report cardinality");
     expect(std::filesystem::exists(snapshot_path), "stdin build should write snapshot");
     expect(std::filesystem::exists(sidecar_path), "stdin build should write native sidecar");
@@ -82,7 +84,9 @@ void test_tool_build_from_stdin() {
 
 }  // namespace
 
-int main() {
+int main(int argc, char** argv) {
+    expect(argc == 2, "pthash tool test requires the tool path");
+    tool_path = argv[1];
     test_tool_build_dump_lookup();
     test_tool_build_from_stdin();
     return 0;

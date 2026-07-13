@@ -6,11 +6,13 @@
 #include <filesystem>
 #include <fstream>
 #include <istream>
+#include <limits>
 #include <ostream>
 #include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -261,6 +263,7 @@ public:
         detail::write_pod(out, next_id_);
         detail::write_pod(out, profile_);
         detail::write_pod(out, static_cast<std::uint64_t>(live_size_));
+        detail::write_pod(out, logical_fingerprint());
 
         for_each_live([&](StringId id, std::string_view value) {
             detail::write_pod(out, id);
@@ -275,6 +278,10 @@ public:
             throw std::runtime_error("failed to open file for dictionary serialization: " + path);
         }
         save(out);
+        out.close();
+        if (!out) {
+            throw std::runtime_error("failed to close dictionary serialization file: " + path);
+        }
 
         if (base_.has_native_compact_index()) {
             base_.save_native_compact_index(path);
@@ -282,7 +289,7 @@ public:
             remove_compact_sidecars(path);
         }
 
-        save_native_snapshot(path);
+        save_native_snapshot(path, logical_fingerprint());
     }
 
     // Saves a compacted snapshot to path without mutating the original dictionary.
@@ -312,28 +319,46 @@ public:
         }
 
         const auto version = detail::read_pod<std::uint32_t>(in);
-        if (version != 1 && version != detail::kFormatVersion) {
+        if (version < 1 || version > detail::kFormatVersion) {
             throw std::runtime_error("unsupported serialized dictionary version");
         }
 
         const auto next_id = detail::read_pod<StringId>(in);
         BackendProfile profile = BackendProfile::FastLookup;
         if (version >= 2) {
-            profile = normalize_profile(detail::read_pod<std::uint8_t>(in));
+            profile = require_profile(detail::read_pod<std::uint8_t>(in));
         }
 
         StringBimap dict(0, profile);
         dict.next_id_ = next_id;
 
         const auto live_count = detail::read_pod<std::uint64_t>(in);
+        if (live_count > next_id) {
+            throw std::runtime_error("serialized dictionary live count exceeds its ID range");
+        }
+        const auto stored_fingerprint =
+            version >= 3 ? detail::read_pod<std::uint64_t>(in) : 0;
         std::vector<BaseSegment::BuildItem> items;
         items.reserve(static_cast<std::size_t>(live_count));
+        std::unordered_set<std::string> seen_values;
+        seen_values.reserve(static_cast<std::size_t>(live_count));
+        std::unordered_set<StringId> seen_ids;
+        seen_ids.reserve(static_cast<std::size_t>(live_count));
 
         for (std::uint64_t i = 0; i < live_count; ++i) {
             const auto id = detail::read_pod<StringId>(in);
             const auto size = detail::read_pod<std::uint64_t>(in);
+            if (id >= next_id || size == 0 || size > std::numeric_limits<std::uint32_t>::max()) {
+                throw std::runtime_error("invalid serialized dictionary entry");
+            }
             const auto value = detail::read_string(in, static_cast<std::size_t>(size));
+            if (!seen_ids.insert(id).second || !seen_values.insert(value).second) {
+                throw std::runtime_error("duplicate serialized dictionary entry");
+            }
             items.push_back(BaseSegment::BuildItem{id, value});
+        }
+        if (version >= 3 && fingerprint(next_id, profile, items) != stored_fingerprint) {
+            throw std::runtime_error("serialized dictionary fingerprint mismatch");
         }
 
         dict.base_.rebuild(std::move(items));
@@ -359,28 +384,46 @@ public:
         }
 
         const auto version = detail::read_pod<std::uint32_t>(in);
-        if (version != 1 && version != detail::kFormatVersion) {
+        if (version < 1 || version > detail::kFormatVersion) {
             throw std::runtime_error("unsupported serialized dictionary version");
         }
 
         const auto next_id = detail::read_pod<StringId>(in);
         BackendProfile profile = BackendProfile::FastLookup;
         if (version >= 2) {
-            profile = normalize_profile(detail::read_pod<std::uint8_t>(in));
+            profile = require_profile(detail::read_pod<std::uint8_t>(in));
         }
 
         StringBimap dict(0, profile);
         dict.next_id_ = next_id;
 
         const auto live_count = detail::read_pod<std::uint64_t>(in);
+        if (live_count > next_id) {
+            throw std::runtime_error("serialized dictionary live count exceeds its ID range");
+        }
+        const auto stored_fingerprint =
+            version >= 3 ? detail::read_pod<std::uint64_t>(in) : 0;
         std::vector<BaseSegment::BuildItem> items;
         items.reserve(static_cast<std::size_t>(live_count));
+        std::unordered_set<std::string> seen_values;
+        seen_values.reserve(static_cast<std::size_t>(live_count));
+        std::unordered_set<StringId> seen_ids;
+        seen_ids.reserve(static_cast<std::size_t>(live_count));
 
         for (std::uint64_t i = 0; i < live_count; ++i) {
             const auto id = detail::read_pod<StringId>(in);
             const auto size = detail::read_pod<std::uint64_t>(in);
+            if (id >= next_id || size == 0 || size > std::numeric_limits<std::uint32_t>::max()) {
+                throw std::runtime_error("invalid serialized dictionary entry");
+            }
             const auto value = detail::read_string(in, static_cast<std::size_t>(size));
+            if (!seen_ids.insert(id).second || !seen_values.insert(value).second) {
+                throw std::runtime_error("duplicate serialized dictionary entry");
+            }
             items.push_back(BaseSegment::BuildItem{id, value});
+        }
+        if (version >= 3 && fingerprint(next_id, profile, items) != stored_fingerprint) {
+            throw std::runtime_error("serialized dictionary fingerprint mismatch");
         }
 
         bool loaded_native_compact = false;
@@ -394,7 +437,7 @@ public:
             ((profile == BackendProfile::CompactMemoryMarisa ||
               profile == BackendProfile::CompactMemoryMarisaArrayMap) &&
              has_marisa_sidecars)) {
-            loaded_native_compact = dict.base_.load_native_compact_index(std::move(items), path);
+            loaded_native_compact = dict.base_.load_native_compact_index(items, path);
         }
         if (!loaded_native_compact) {
             dict.base_.rebuild(std::move(items));
@@ -445,6 +488,59 @@ private:
         return BackendProfile::CompactMemoryMarisa;
     }
 
+    [[nodiscard]] static BackendProfile require_profile(std::uint8_t raw) {
+        const auto profile = normalize_profile(raw);
+        if (static_cast<std::uint8_t>(profile) != raw) {
+            throw std::runtime_error("invalid serialized dictionary backend profile");
+        }
+        return profile;
+    }
+
+    static void hash_bytes(std::uint64_t& hash, const void* data, std::size_t size) noexcept {
+        const auto* bytes = static_cast<const unsigned char*>(data);
+        for (std::size_t i = 0; i < size; ++i) {
+            hash ^= bytes[i];
+            hash *= 1099511628211ULL;
+        }
+    }
+
+    template <class T>
+    static void hash_value(std::uint64_t& hash, const T& value) noexcept {
+        hash_bytes(hash, &value, sizeof(value));
+    }
+
+    [[nodiscard]] static std::uint64_t fingerprint(
+        StringId next_id, BackendProfile profile,
+        const std::vector<BaseSegment::BuildItem>& items) noexcept {
+        std::uint64_t hash = 14695981039346656037ULL;
+        hash_value(hash, next_id);
+        hash_value(hash, profile);
+        const auto count = static_cast<std::uint64_t>(items.size());
+        hash_value(hash, count);
+        for (const auto& item : items) {
+            hash_value(hash, item.id);
+            const auto size = static_cast<std::uint64_t>(item.value.size());
+            hash_value(hash, size);
+            hash_bytes(hash, item.value.data(), item.value.size());
+        }
+        return hash;
+    }
+
+    [[nodiscard]] std::uint64_t logical_fingerprint() const noexcept {
+        std::uint64_t hash = 14695981039346656037ULL;
+        hash_value(hash, next_id_);
+        hash_value(hash, profile_);
+        const auto count = static_cast<std::uint64_t>(live_size_);
+        hash_value(hash, count);
+        for_each_live([&](StringId id, std::string_view value) {
+            hash_value(hash, id);
+            const auto size = static_cast<std::uint64_t>(value.size());
+            hash_value(hash, size);
+            hash_bytes(hash, value.data(), value.size());
+        });
+        return hash;
+    }
+
     struct NativeSnapshotHeader {
         std::array<char, detail::kNativeStateMagic.size()> magic = detail::kNativeStateMagic;
         std::uint32_t version = detail::kNativeStateVersion;
@@ -452,9 +548,10 @@ private:
         BackendProfile profile = BackendProfile::FastLookup;
         std::uint64_t live_size = 0;
         std::uint64_t tombstone_word_count = 0;
+        std::uint64_t logical_fingerprint = 0;
     };
 
-    void save_native_snapshot(const std::string& path) const {
+    void save_native_snapshot(const std::string& path, std::uint64_t logical_fingerprint) const {
         try {
             base_.save_native_storage(path);
             if (delta_.size() != 0) {
@@ -475,6 +572,7 @@ private:
             header.live_size = static_cast<std::uint64_t>(live_size_);
             header.tombstone_word_count =
                 static_cast<std::uint64_t>(tombstones_.words().size());
+            header.logical_fingerprint = logical_fingerprint;
 
             detail::write_bytes(out, header.magic.data(), header.magic.size());
             detail::write_pod(out, header.version);
@@ -482,6 +580,7 @@ private:
             detail::write_pod(out, header.profile);
             detail::write_pod(out, header.live_size);
             detail::write_pod(out, header.tombstone_word_count);
+            detail::write_pod(out, header.logical_fingerprint);
             if (!tombstones_.words().empty()) {
                 out.write(reinterpret_cast<const char*>(tombstones_.words().data()),
                           static_cast<std::streamsize>(tombstones_.words().size() * sizeof(std::uint64_t)));
@@ -502,6 +601,21 @@ private:
         }
 
         try {
+            std::ifstream logical(path, std::ios::binary);
+            if (!logical) {
+                return std::nullopt;
+            }
+            std::array<char, detail::kFileMagic.size()> logical_magic{};
+            logical.read(logical_magic.data(), static_cast<std::streamsize>(logical_magic.size()));
+            if (!logical || logical_magic != detail::kFileMagic ||
+                detail::read_pod<std::uint32_t>(logical) != detail::kFormatVersion) {
+                return std::nullopt;
+            }
+            const auto logical_next_id = detail::read_pod<StringId>(logical);
+            const auto logical_profile = require_profile(detail::read_pod<std::uint8_t>(logical));
+            const auto logical_live_size = detail::read_pod<std::uint64_t>(logical);
+            const auto logical_fingerprint = detail::read_pod<std::uint64_t>(logical);
+
             std::ifstream in(detail::native_state_sidecar_path(path), std::ios::binary);
             if (!in) {
                 return std::nullopt;
@@ -519,9 +633,19 @@ private:
             }
 
             const auto next_id = detail::read_pod<StringId>(in);
-            const auto profile = normalize_profile(detail::read_pod<std::uint8_t>(in));
+            const auto profile = require_profile(detail::read_pod<std::uint8_t>(in));
             const auto live_size = detail::read_pod<std::uint64_t>(in);
             const auto tombstone_word_count = detail::read_pod<std::uint64_t>(in);
+            const auto native_fingerprint = detail::read_pod<std::uint64_t>(in);
+            if (next_id != logical_next_id || profile != logical_profile ||
+                live_size != logical_live_size || native_fingerprint != logical_fingerprint) {
+                return std::nullopt;
+            }
+            const auto max_tombstone_words =
+                (static_cast<std::uint64_t>(next_id) + 63U) / 64U;
+            if (tombstone_word_count > max_tombstone_words) {
+                return std::nullopt;
+            }
             std::vector<std::uint64_t> tombstone_words(static_cast<std::size_t>(tombstone_word_count));
             if (!tombstone_words.empty()) {
                 in.read(reinterpret_cast<char*>(tombstone_words.data()),
@@ -552,6 +676,10 @@ private:
                 }
             } else {
                 dict.delta_.clear();
+            }
+
+            if (dict.logical_fingerprint() != logical_fingerprint) {
+                return std::nullopt;
             }
 
             return dict;

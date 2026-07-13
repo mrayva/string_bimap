@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -183,6 +184,9 @@ public:
 
             const auto expected_live_size = detail::read_pod<std::uint64_t>(in);
             const auto entry_count = detail::read_pod<std::uint64_t>(in);
+            if (entry_count > static_cast<std::uint64_t>(kInvalidId)) {
+                throw std::runtime_error("native base entry count exceeds StringId limits");
+            }
             std::vector<EntryLocation> entries(static_cast<std::size_t>(entry_count));
             if (!entries.empty()) {
                 in.read(reinterpret_cast<char*>(entries.data()),
@@ -193,6 +197,9 @@ public:
             }
 
             const auto arena_size = detail::read_pod<std::uint64_t>(in);
+            if (arena_size > std::numeric_limits<std::uint32_t>::max()) {
+                throw std::runtime_error("native base arena exceeds 32-bit limits");
+            }
             std::vector<char> bytes(static_cast<std::size_t>(arena_size));
             if (!bytes.empty()) {
                 in.read(bytes.data(), static_cast<std::streamsize>(bytes.size()));
@@ -201,6 +208,11 @@ public:
                 }
             }
 
+            for (const auto& entry : entries) {
+                if (!PackedStringArena::valid_location(entry, bytes)) {
+                    throw std::runtime_error("native base entry points outside its arena");
+                }
+            }
             entries_by_id_ = std::move(entries);
             live_size_ = static_cast<std::size_t>(expected_live_size);
             arena_.restore_bytes(std::move(bytes));
@@ -221,6 +233,9 @@ public:
     }
 
     void save_native_compact_index(const std::string& path) const {
+#if !defined(STRING_BIMAP_HAS_XCDAT) && !defined(STRING_BIMAP_HAS_MARISA)
+        (void)path;
+#endif
 #if defined(STRING_BIMAP_HAS_XCDAT)
         if (use_xcdat_index()) {
             xcdat::save(*trie_, detail::compact_trie_sidecar_path(path));
@@ -238,12 +253,25 @@ public:
         throw std::runtime_error("compact index is not available");
     }
 
-    [[nodiscard]] bool load_native_compact_index(std::vector<BuildItem> items, const std::string& path) {
-        rebuild_storage(items);
-        return load_native_compact_index_from_storage(path);
+    [[nodiscard]] bool load_native_compact_index(const std::vector<BuildItem>& items,
+                                                 const std::string& path) {
+        auto storage_items = items;
+        rebuild_storage(storage_items);
+        if (!load_native_compact_index_from_storage(path)) {
+            return false;
+        }
+        for (const auto& item : items) {
+            if (find_id(item.value) != item.id) {
+                return false;
+            }
+        }
+        return true;
     }
 
     [[nodiscard]] bool load_native_compact_index_from_storage(const std::string& path) {
+#if !defined(STRING_BIMAP_HAS_XCDAT) && !defined(STRING_BIMAP_HAS_MARISA)
+        (void)path;
+#endif
 #if defined(STRING_BIMAP_HAS_XCDAT)
         if (profile_ == BackendProfile::CompactMemory) {
             try {
@@ -252,6 +280,9 @@ public:
                 local_to_global_ = detail::read_vector_file<StringId>(detail::compact_ids_sidecar_path(path));
                 if (!trie_.has_value() || local_to_global_.size() != trie_->num_keys()) {
                     throw std::runtime_error("compact trie sidecar size mismatch");
+                }
+                if (!validate_lookup_against_storage()) {
+                    throw std::runtime_error("compact trie sidecar does not match base storage");
                 }
                 return true;
             } catch (...) {
@@ -272,6 +303,9 @@ public:
                     throw std::runtime_error("compact marisa sidecar size mismatch");
                 }
                 marisa_ready_ = true;
+                if (!validate_lookup_against_storage()) {
+                    throw std::runtime_error("compact marisa sidecar does not match base storage");
+                }
                 return true;
             } catch (...) {
                 marisa_trie_.clear();
@@ -377,6 +411,15 @@ public:
     }
 
 private:
+    [[nodiscard]] bool validate_lookup_against_storage() const {
+        for (StringId id = 0; id < entries_by_id_.size(); ++id) {
+            if (entries_by_id_[id].live() && find_id(get_string(id)) != id) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     [[nodiscard]] std::size_t live_string_bytes() const noexcept {
         std::size_t total = 0;
         for (const auto& entry : entries_by_id_) {

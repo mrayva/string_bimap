@@ -62,7 +62,8 @@ In practice, start with:
 - Empty strings are ignored and never stored.
 - `save()`/`load()` preserve logical state and the selected backend profile.
 - `save(path)` writes native sidecars for the current in-memory state.
-- `load(path)` prefers native sidecars and falls back to logical rebuild.
+- `load(path)` verifies native sidecars against the logical snapshot and falls
+  back to a logical rebuild when they are missing, stale, or corrupt.
 - Stream `save(std::ostream&)` / `load(std::istream&)` remain logical-only.
 
 ## Lifetime And Safety
@@ -89,7 +90,7 @@ Optional backends:
 - `marisa.h` + `libmarisa` enable `CompactMemoryMarisa`
 - `tsl/htrie_map.h` enables compact-profile trie prefix indexing
 - `tsl/array_map.h` enables `FastLookupArrayMap` and `CompactMemoryMarisaArrayMap`
-- a local `pthash` checkout enables `string_bimap::PthashBimap`
+- a local `pthash` checkout enables `string_bimap::PthashBimap` (PTHash 2.0.0 is tested)
 
 For `array-hash`, point CMake at a local checkout if needed:
 
@@ -112,7 +113,8 @@ ctest --test-dir build-pthash --output-on-failure
 
 ## Build With vcpkg
 
-The repository includes local overlay ports for `xcdat` and `hat-trie`.
+The repository includes local overlay ports for xcdat 0.2.0 and hat-trie 0.7.1.
+The manifest baseline currently resolves marisa-trie 0.3.1.
 
 ```sh
 cmake -S . -B build-vcpkg \
@@ -171,7 +173,7 @@ For file-based persistence, `save(path)` also writes a native `pthash` sidecar:
 - `path + ".native.pthash"`
 
 and `load(path)` prefers that native sidecar before falling back to deterministic
-rebuild from the logical main file.
+rebuild from the logical main file. Invalid or incompatible sidecars are ignored.
 
 Useful compact-ID helpers:
 

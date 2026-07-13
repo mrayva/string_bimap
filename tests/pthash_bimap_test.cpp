@@ -95,6 +95,10 @@ void test_deterministic_ids_ignore_input_order_and_duplicates() {
     for (const auto& value : right) {
         expect(a.find(value) == b.find(value), "same set should get same ids across sessions");
     }
+
+    PthashBimap with_empty(std::vector<std::string>{"", "TERM", ""});
+    expect(with_empty.size() == 1, "empty strings should be discarded");
+    expect(!with_empty.find("").has_value(), "empty strings should not be members");
 }
 
 void test_required_id_width_thresholds() {
@@ -164,6 +168,15 @@ void test_native_file_sidecar_round_trip() {
         expect(restored.find(value) == built.find(value), "native sidecar load should preserve ids");
     }
 
+    {
+        std::ofstream corrupt(native_sidecar, std::ios::binary | std::ios::trunc);
+        corrupt << "corrupt";
+    }
+    const auto rebuilt = PthashBimap::load(path);
+    for (const auto& value : values) {
+        expect(rebuilt.find(value) == built.find(value), "corrupt native sidecar should rebuild");
+    }
+
     std::filesystem::remove(path);
     std::filesystem::remove(native_sidecar);
 }
@@ -205,6 +218,38 @@ void test_json_array_loader_and_builder() {
     const auto wrapped_values = PthashBimap::load_values_from_json_array(wrapped);
     expect(wrapped_values.size() == 3, "wrapped OpenFIGI-style JSON should be accepted");
     expect(wrapped_values[1] == "ETF", "wrapped OpenFIGI-style JSON should preserve order");
+
+    std::stringstream unicode;
+    unicode << "[\"Smile: \\uD83D\\uDE00\"]";
+    const auto unicode_values = PthashBimap::load_values_from_json_array(unicode);
+    expect(unicode_values[0] == "Smile: \xF0\x9F\x98\x80",
+           "JSON loader should decode surrogate pairs as UTF-8");
+
+    bool threw = false;
+    try {
+        std::stringstream invalid("[\"\\uD83Dx\"]");
+        (void)PthashBimap::load_values_from_json_array(invalid);
+    } catch (const std::runtime_error&) {
+        threw = true;
+    }
+    expect(threw, "JSON loader should reject unpaired surrogates");
+}
+
+void test_invalid_persisted_width_is_rejected() {
+    PthashBimap built(std::vector<std::string>{"Bond", "ETF"});
+    std::stringstream buffer(std::ios::in | std::ios::out | std::ios::binary);
+    built.save(buffer);
+    auto bytes = buffer.str();
+    bytes[13] = static_cast<char>(3);
+    std::stringstream corrupt(bytes, std::ios::in | std::ios::binary);
+
+    bool threw = false;
+    try {
+        (void)PthashBimap::load(corrupt);
+    } catch (const std::runtime_error&) {
+        threw = true;
+    }
+    expect(threw, "invalid persisted id widths should be rejected");
 }
 
 }  // namespace
@@ -218,5 +263,6 @@ int main() {
     test_native_file_sidecar_round_trip();
     test_csv_loader_and_builder();
     test_json_array_loader_and_builder();
+    test_invalid_persisted_width_is_rejected();
     return 0;
 }

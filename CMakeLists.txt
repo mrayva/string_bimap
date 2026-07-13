@@ -3,6 +3,7 @@ cmake_minimum_required(VERSION 3.20)
 project(string_bimap LANGUAGES CXX VERSION 0.1.0)
 
 option(STRING_BIMAP_BUILD_EXAMPLES "Build examples" ON)
+option(STRING_BIMAP_BUILD_TOOLS "Build command-line tools" ON)
 option(STRING_BIMAP_BUILD_TESTS "Build test executables" ON)
 option(STRING_BIMAP_BUILD_BENCHMARKS "Build benchmark executables" ON)
 option(STRING_BIMAP_USE_XCDAT "Enable xcdat-backed static index when xcdat headers are available" ON)
@@ -33,7 +34,7 @@ if(STRING_BIMAP_USE_XCDAT)
             INTERFACE
                 $<BUILD_INTERFACE:${STRING_BIMAP_XCDAT_INCLUDE_DIR}>
         )
-        target_compile_definitions(string_bimap INTERFACE STRING_BIMAP_HAS_XCDAT=1)
+        target_compile_definitions(string_bimap INTERFACE $<BUILD_INTERFACE:STRING_BIMAP_HAS_XCDAT=1>)
     endif()
 endif()
 
@@ -51,7 +52,7 @@ if(STRING_BIMAP_USE_MARISA)
             INTERFACE
                 $<BUILD_INTERFACE:${STRING_BIMAP_MARISA_LIBRARY}>
         )
-        target_compile_definitions(string_bimap INTERFACE STRING_BIMAP_HAS_MARISA=1)
+        target_compile_definitions(string_bimap INTERFACE $<BUILD_INTERFACE:STRING_BIMAP_HAS_MARISA=1>)
     endif()
 endif()
 
@@ -63,7 +64,7 @@ if(STRING_BIMAP_USE_HAT_TRIE)
             INTERFACE
                 $<BUILD_INTERFACE:${STRING_BIMAP_HAT_TRIE_INCLUDE_DIR}>
         )
-        target_compile_definitions(string_bimap INTERFACE STRING_BIMAP_HAS_HAT_TRIE=1)
+        target_compile_definitions(string_bimap INTERFACE $<BUILD_INTERFACE:STRING_BIMAP_HAS_HAT_TRIE=1>)
     endif()
 endif()
 
@@ -85,7 +86,7 @@ if(STRING_BIMAP_USE_ARRAY_HASH)
             INTERFACE
                 $<BUILD_INTERFACE:${STRING_BIMAP_ARRAY_HASH_INCLUDE_DIR}>
         )
-        target_compile_definitions(string_bimap INTERFACE STRING_BIMAP_HAS_ARRAY_HASH=1)
+        target_compile_definitions(string_bimap INTERFACE $<BUILD_INTERFACE:STRING_BIMAP_HAS_ARRAY_HASH=1>)
     endif()
 endif()
 
@@ -93,8 +94,33 @@ if(STRING_BIMAP_USE_PTHASH)
     if(STRING_BIMAP_PTHASH_ROOT AND EXISTS "${STRING_BIMAP_PTHASH_ROOT}/CMakeLists.txt")
         if(EXISTS "${STRING_BIMAP_PTHASH_ROOT}/external/bits/CMakeLists.txt")
             add_subdirectory("${STRING_BIMAP_PTHASH_ROOT}" "${CMAKE_CURRENT_BINARY_DIR}/pthash" EXCLUDE_FROM_ALL)
+            if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND NOT APPLE)
+                # PTHash v2 and bits force libc++ headers without matching linker flags.
+                foreach(_string_bimap_pthash_target IN ITEMS PTHASH BITS)
+                    get_target_property(
+                        _string_bimap_pthash_compile_options
+                        ${_string_bimap_pthash_target}
+                        INTERFACE_COMPILE_OPTIONS
+                    )
+                    if(_string_bimap_pthash_compile_options)
+                        list(REMOVE_ITEM _string_bimap_pthash_compile_options -stdlib=libc++)
+                        set_property(
+                            TARGET ${_string_bimap_pthash_target}
+                            PROPERTY INTERFACE_COMPILE_OPTIONS "${_string_bimap_pthash_compile_options}"
+                        )
+                    endif()
+                endforeach()
+            endif()
             target_link_libraries(string_bimap INTERFACE $<BUILD_INTERFACE:PTHASH>)
-            target_compile_definitions(string_bimap INTERFACE STRING_BIMAP_HAS_PTHASH=1)
+            target_compile_definitions(string_bimap INTERFACE $<BUILD_INTERFACE:STRING_BIMAP_HAS_PTHASH=1>)
+            if(EXISTS "${STRING_BIMAP_PTHASH_ROOT}/include/pthash.hpp")
+                target_include_directories(
+                    string_bimap
+                    INTERFACE
+                        $<BUILD_INTERFACE:${STRING_BIMAP_PTHASH_ROOT}/include>
+                )
+                target_compile_definitions(string_bimap INTERFACE $<BUILD_INTERFACE:STRING_BIMAP_PTHASH_V2=1>)
+            endif()
         else()
             message(STATUS "STRING_BIMAP_PTHASH_ROOT is set, but required pthash submodules are missing; skipping pthash integration")
         endif()
@@ -112,6 +138,22 @@ install(
 )
 
 include(CMakePackageConfigHelpers)
+set(STRING_BIMAP_CONFIG_WITH_XCDAT FALSE)
+set(STRING_BIMAP_CONFIG_WITH_MARISA FALSE)
+set(STRING_BIMAP_CONFIG_WITH_HAT_TRIE FALSE)
+set(STRING_BIMAP_CONFIG_WITH_ARRAY_HASH FALSE)
+if(STRING_BIMAP_XCDAT_INCLUDE_DIR)
+    set(STRING_BIMAP_CONFIG_WITH_XCDAT TRUE)
+endif()
+if(STRING_BIMAP_MARISA_INCLUDE_DIR AND STRING_BIMAP_MARISA_LIBRARY)
+    set(STRING_BIMAP_CONFIG_WITH_MARISA TRUE)
+endif()
+if(STRING_BIMAP_HAT_TRIE_INCLUDE_DIR)
+    set(STRING_BIMAP_CONFIG_WITH_HAT_TRIE TRUE)
+endif()
+if(STRING_BIMAP_ARRAY_HASH_INCLUDE_DIR)
+    set(STRING_BIMAP_CONFIG_WITH_ARRAY_HASH TRUE)
+endif()
 configure_package_config_file(
     "${CMAKE_CURRENT_SOURCE_DIR}/cmake/string_bimapConfig.cmake.in"
     "${CMAKE_CURRENT_BINARY_DIR}/string_bimapConfig.cmake"
@@ -136,10 +178,12 @@ if(STRING_BIMAP_BUILD_EXAMPLES)
     if(TARGET PTHASH)
         add_executable(string_bimap_pthash_example examples/pthash_bimap.cpp)
         target_link_libraries(string_bimap_pthash_example PRIVATE string_bimap::string_bimap)
-
-        add_executable(string_bimap_pthash_tool tools/pthash_bimap_tool.cpp)
-        target_link_libraries(string_bimap_pthash_tool PRIVATE string_bimap::string_bimap)
     endif()
+endif()
+
+if(TARGET PTHASH AND (STRING_BIMAP_BUILD_TOOLS OR STRING_BIMAP_BUILD_TESTS))
+    add_executable(string_bimap_pthash_tool tools/pthash_bimap_tool.cpp)
+    target_link_libraries(string_bimap_pthash_tool PRIVATE string_bimap::string_bimap)
 endif()
 
 if(STRING_BIMAP_BUILD_TESTS)
@@ -163,7 +207,11 @@ if(STRING_BIMAP_BUILD_TESTS)
 
         add_executable(string_bimap_pthash_tool_test tests/pthash_tool_test.cpp)
         target_link_libraries(string_bimap_pthash_tool_test PRIVATE string_bimap::string_bimap)
-        add_test(NAME string_bimap_pthash_tool_test COMMAND string_bimap_pthash_tool_test)
+        add_dependencies(string_bimap_pthash_tool_test string_bimap_pthash_tool)
+        add_test(
+            NAME string_bimap_pthash_tool_test
+            COMMAND string_bimap_pthash_tool_test $<TARGET_FILE:string_bimap_pthash_tool>
+        )
     endif()
 endif()
 

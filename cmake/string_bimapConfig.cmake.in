@@ -1,3 +1,37 @@
 @PACKAGE_INIT@
 
 include("${CMAKE_CURRENT_LIST_DIR}/string_bimapTargets.cmake")
+
+if(@STRING_BIMAP_CONFIG_WITH_XCDAT@)
+    find_path(STRING_BIMAP_XCDAT_INCLUDE_DIR xcdat.hpp)
+    if(STRING_BIMAP_XCDAT_INCLUDE_DIR)
+        target_include_directories(string_bimap::string_bimap INTERFACE "${STRING_BIMAP_XCDAT_INCLUDE_DIR}")
+        target_compile_definitions(string_bimap::string_bimap INTERFACE STRING_BIMAP_HAS_XCDAT=1)
+    endif()
+endif()
+
+if(@STRING_BIMAP_CONFIG_WITH_MARISA@)
+    find_path(STRING_BIMAP_MARISA_INCLUDE_DIR marisa.h)
+    find_library(STRING_BIMAP_MARISA_LIBRARY NAMES marisa libmarisa)
+    if(STRING_BIMAP_MARISA_INCLUDE_DIR AND STRING_BIMAP_MARISA_LIBRARY)
+        target_include_directories(string_bimap::string_bimap INTERFACE "${STRING_BIMAP_MARISA_INCLUDE_DIR}")
+        target_link_libraries(string_bimap::string_bimap INTERFACE "${STRING_BIMAP_MARISA_LIBRARY}")
+        target_compile_definitions(string_bimap::string_bimap INTERFACE STRING_BIMAP_HAS_MARISA=1)
+    endif()
+endif()
+
+if(@STRING_BIMAP_CONFIG_WITH_HAT_TRIE@)
+    find_path(STRING_BIMAP_HAT_TRIE_INCLUDE_DIR tsl/htrie_map.h)
+    if(STRING_BIMAP_HAT_TRIE_INCLUDE_DIR)
+        target_include_directories(string_bimap::string_bimap INTERFACE "${STRING_BIMAP_HAT_TRIE_INCLUDE_DIR}")
+        target_compile_definitions(string_bimap::string_bimap INTERFACE STRING_BIMAP_HAS_HAT_TRIE=1)
+    endif()
+endif()
+
+if(@STRING_BIMAP_CONFIG_WITH_ARRAY_HASH@)
+    find_path(STRING_BIMAP_ARRAY_HASH_INCLUDE_DIR tsl/array_map.h)
+    if(STRING_BIMAP_ARRAY_HASH_INCLUDE_DIR)
+        target_include_directories(string_bimap::string_bimap INTERFACE "${STRING_BIMAP_ARRAY_HASH_INCLUDE_DIR}")
+        target_compile_definitions(string_bimap::string_bimap INTERFACE STRING_BIMAP_HAS_ARRAY_HASH=1)
+    endif()
+endif()

@@ -4,7 +4,9 @@
 #include <array>
 #include <cstddef>
 #include <fstream>
+#include <limits>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -186,6 +188,9 @@ public:
 
             const auto expected_live_size = detail::read_pod<std::uint64_t>(in);
             const auto entry_count = detail::read_pod<std::uint64_t>(in);
+            if (entry_count > static_cast<std::uint64_t>(kInvalidId)) {
+                throw std::runtime_error("native delta entry count exceeds StringId limits");
+            }
             std::vector<EntryLocation> entries(static_cast<std::size_t>(entry_count));
             if (!entries.empty()) {
                 in.read(reinterpret_cast<char*>(entries.data()),
@@ -195,6 +200,9 @@ public:
                 }
             }
             const auto bytes_size = detail::read_pod<std::uint64_t>(in);
+            if (bytes_size > std::numeric_limits<std::uint32_t>::max()) {
+                throw std::runtime_error("native delta arena exceeds 32-bit limits");
+            }
             std::vector<char> bytes(static_cast<std::size_t>(bytes_size));
             if (!bytes.empty()) {
                 in.read(bytes.data(), static_cast<std::streamsize>(bytes.size()));
@@ -203,6 +211,11 @@ public:
                 }
             }
 
+            for (const auto& entry : entries) {
+                if (!PackedStringArena::valid_location(entry, bytes)) {
+                    throw std::runtime_error("native delta entry points outside its arena");
+                }
+            }
             arena_.restore_bytes(std::move(bytes));
             entries_by_id_ = std::move(entries);
             rebuild_indexes_from_storage();

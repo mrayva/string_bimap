@@ -1,0 +1,151 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  core:
+    name: Core (${{ matrix.compiler }}, C++${{ matrix.standard }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [gcc, clang]
+        standard: [17, 20]
+        include:
+          - compiler: gcc
+            cc: gcc
+            cxx: g++
+          - compiler: clang
+            cc: clang
+            cxx: clang++
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Configure
+        env:
+          CC: ${{ matrix.cc }}
+          CXX: ${{ matrix.cxx }}
+        run: >-
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_CXX_STANDARD=${{ matrix.standard }}
+          -DCMAKE_CXX_STANDARD_REQUIRED=ON
+          -DSTRING_BIMAP_BUILD_EXAMPLES=ON
+          -DSTRING_BIMAP_BUILD_TOOLS=OFF
+          -DSTRING_BIMAP_BUILD_TESTS=ON
+          -DSTRING_BIMAP_BUILD_BENCHMARKS=OFF
+          -DSTRING_BIMAP_USE_XCDAT=OFF
+          -DSTRING_BIMAP_USE_MARISA=OFF
+          -DSTRING_BIMAP_USE_HAT_TRIE=OFF
+          -DSTRING_BIMAP_USE_ARRAY_HASH=OFF
+          -DSTRING_BIMAP_USE_PTHASH=OFF
+
+      - name: Build
+        run: cmake --build build --parallel 2
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+  sanitizers:
+    name: Sanitizers (Clang, C++20)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Configure
+        env:
+          CC: clang
+          CXX: clang++
+        run: >-
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Debug
+          -DCMAKE_CXX_STANDARD=20
+          -DCMAKE_CXX_STANDARD_REQUIRED=ON
+          -DCMAKE_CXX_FLAGS='-fsanitize=address,undefined -fno-omit-frame-pointer -Wall -Wextra -Wpedantic'
+          -DCMAKE_EXE_LINKER_FLAGS='-fsanitize=address,undefined'
+          -DSTRING_BIMAP_BUILD_EXAMPLES=OFF
+          -DSTRING_BIMAP_BUILD_TOOLS=OFF
+          -DSTRING_BIMAP_BUILD_TESTS=ON
+          -DSTRING_BIMAP_BUILD_BENCHMARKS=OFF
+          -DSTRING_BIMAP_USE_XCDAT=OFF
+          -DSTRING_BIMAP_USE_MARISA=OFF
+          -DSTRING_BIMAP_USE_HAT_TRIE=OFF
+          -DSTRING_BIMAP_USE_ARRAY_HASH=OFF
+          -DSTRING_BIMAP_USE_PTHASH=OFF
+
+      - name: Build
+        run: cmake --build build --parallel 2
+
+      - name: Test
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+        run: ctest --test-dir build --output-on-failure
+
+  integrations:
+    name: Integrations (${{ matrix.compiler }}, C++${{ matrix.standard }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - compiler: gcc
+            standard: 17
+            cc: gcc
+            cxx: g++
+          - compiler: clang
+            standard: 20
+            cc: clang
+            cxx: clang++
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Check out optional backends
+        run: |
+          git clone --depth 1 --branch v0.7.2 https://github.com/Tessil/array-hash.git "$RUNNER_TEMP/array-hash"
+          git clone --depth 1 --branch v2.0.0 --recurse-submodules --shallow-submodules https://github.com/jermp/pthash.git "$RUNNER_TEMP/pthash"
+
+      - name: Configure
+        env:
+          CC: ${{ matrix.cc }}
+          CXX: ${{ matrix.cxx }}
+        run: >-
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_CXX_STANDARD=${{ matrix.standard }}
+          -DCMAKE_CXX_STANDARD_REQUIRED=ON
+          -DCMAKE_TOOLCHAIN_FILE="$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
+          -DSTRING_BIMAP_ARRAY_HASH_ROOT="$RUNNER_TEMP/array-hash"
+          -DSTRING_BIMAP_PTHASH_ROOT="$RUNNER_TEMP/pthash"
+          -DSTRING_BIMAP_BUILD_EXAMPLES=ON
+          -DSTRING_BIMAP_BUILD_TOOLS=ON
+          -DSTRING_BIMAP_BUILD_TESTS=ON
+          -DSTRING_BIMAP_BUILD_BENCHMARKS=OFF
+
+      - name: Build
+        run: cmake --build build --parallel 2
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Install
+        run: cmake --install build --prefix "$RUNNER_TEMP/string-bimap-install"

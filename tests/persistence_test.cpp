@@ -1,3 +1,4 @@
+#include <fstream>
 #include <sstream>
 #include <string>
 #include <unordered_map>
@@ -172,6 +173,51 @@ void test_save_compacted_preserves_ids_and_sidecars() {
 #endif
 }
 
+void test_stale_native_and_compact_sidecars_fall_back() {
+    const std::string path = "/tmp/string_bimap_stale_sidecars.bin";
+    for_each_profile([&](BackendProfile profile) {
+        remove_all_sidecars(path);
+        StringBimap old_snapshot(0, profile);
+        (void)old_snapshot.insert("old_alpha");
+        (void)old_snapshot.insert("old_beta");
+        old_snapshot.compact();
+        old_snapshot.save(path);
+
+        StringBimap replacement(0, profile);
+        (void)replacement.insert("new_alpha");
+        (void)replacement.insert("new_beta");
+        replacement.compact();
+        {
+            std::ofstream out(path, std::ios::binary | std::ios::trunc);
+            replacement.save(out);
+        }
+
+        auto restored = StringBimap::load(path);
+        expect(restored.contains("new_alpha"), "stale sidecars should not replace the logical snapshot");
+        expect(!restored.contains("old_alpha"), "stale native data should be ignored");
+        remove_all_sidecars(path);
+    });
+}
+
+void test_invalid_live_count_is_rejected() {
+    std::stringstream buffer(std::ios::in | std::ios::out | std::ios::binary);
+    string_bimap::detail::write_bytes(buffer, string_bimap::detail::kFileMagic.data(),
+                                      string_bimap::detail::kFileMagic.size());
+    string_bimap::detail::write_pod(buffer, string_bimap::detail::kFormatVersion);
+    string_bimap::detail::write_pod(buffer, StringId{0});
+    string_bimap::detail::write_pod(buffer, BackendProfile::FastLookup);
+    string_bimap::detail::write_pod(buffer, std::uint64_t{1});
+    buffer.seekg(0);
+
+    bool threw = false;
+    try {
+        (void)StringBimap::load(buffer);
+    } catch (const std::runtime_error&) {
+        threw = true;
+    }
+    expect(threw, "live counts outside the serialized ID range should be rejected");
+}
+
 }  // namespace
 
 int main() {
@@ -182,4 +228,6 @@ int main() {
     });
     test_compact_native_sidecars();
     test_save_compacted_preserves_ids_and_sidecars();
+    test_stale_native_and_compact_sidecars_fall_back();
+    test_invalid_live_count_is_rejected();
 }

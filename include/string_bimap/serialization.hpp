@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <fstream>
 #include <istream>
+#include <limits>
 #include <ostream>
 #include <stdexcept>
 #include <string>
@@ -15,9 +16,9 @@
 namespace string_bimap::detail {
 
 inline constexpr std::array<char, 8> kFileMagic = {'S', 'T', 'R', 'B', 'M', 'A', 'P', '1'};
-inline constexpr std::uint32_t kFormatVersion = 2;
+inline constexpr std::uint32_t kFormatVersion = 3;
 inline constexpr std::array<char, 8> kNativeStateMagic = {'S', 'B', 'N', 'A', 'T', 'I', 'V', 'E'};
-inline constexpr std::uint32_t kNativeStateVersion = 1;
+inline constexpr std::uint32_t kNativeStateVersion = 2;
 
 template <class T>
 void write_pod(std::ostream& out, const T& value) {
@@ -40,6 +41,9 @@ T read_pod(std::istream& in) {
 }
 
 inline void write_bytes(std::ostream& out, const char* data, std::size_t size) {
+    if (size > static_cast<std::size_t>(std::numeric_limits<std::streamsize>::max())) {
+        throw std::length_error("serialized dictionary payload exceeds stream limits");
+    }
     out.write(data, static_cast<std::streamsize>(size));
     if (!out) {
         throw std::runtime_error("failed to write serialized dictionary payload");
@@ -107,6 +111,10 @@ std::vector<T> read_vector_file(const std::string& path) {
         throw std::runtime_error("failed to open vector sidecar for reading: " + path);
     }
     const auto count = read_pod<std::uint64_t>(in);
+    if (count > std::vector<T>{}.max_size() ||
+        count > static_cast<std::uint64_t>(std::numeric_limits<std::streamsize>::max()) / sizeof(T)) {
+        throw std::runtime_error("vector sidecar count exceeds platform limits: " + path);
+    }
     std::vector<T> values(static_cast<std::size_t>(count));
     if (!values.empty()) {
         in.read(reinterpret_cast<char*>(values.data()),
@@ -139,6 +147,10 @@ inline std::vector<char> read_blob_file(const std::string& path) {
         throw std::runtime_error("failed to open blob sidecar for reading: " + path);
     }
     const auto size = read_pod<std::uint64_t>(in);
+    if (size > std::vector<char>{}.max_size() ||
+        size > static_cast<std::uint64_t>(std::numeric_limits<std::streamsize>::max())) {
+        throw std::runtime_error("blob sidecar size exceeds platform limits: " + path);
+    }
     std::vector<char> bytes(static_cast<std::size_t>(size));
     if (!bytes.empty()) {
         in.read(bytes.data(), static_cast<std::streamsize>(bytes.size()));
