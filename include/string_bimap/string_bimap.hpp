@@ -338,20 +338,45 @@ public:
         }
         const auto stored_fingerprint =
             version >= 3 ? detail::read_pod<std::uint64_t>(in) : 0;
+        auto remaining = detail::remaining_bytes(in);
+        constexpr std::uint64_t kMinimumSerializedEntrySize =
+            sizeof(StringId) + sizeof(std::uint64_t) + 1;
+        if (remaining && live_count > *remaining / kMinimumSerializedEntrySize) {
+            throw std::runtime_error("serialized dictionary entry count exceeds remaining payload");
+        }
+        constexpr std::size_t kMaximumInitialReserve = 65536;
+        const auto reserve_count = static_cast<std::size_t>(
+            std::min<std::uint64_t>(live_count, kMaximumInitialReserve));
         std::vector<BaseSegment::BuildItem> items;
-        items.reserve(static_cast<std::size_t>(live_count));
+        items.reserve(reserve_count);
         std::unordered_set<std::string> seen_values;
-        seen_values.reserve(static_cast<std::size_t>(live_count));
+        seen_values.reserve(reserve_count);
         std::unordered_set<StringId> seen_ids;
-        seen_ids.reserve(static_cast<std::size_t>(live_count));
+        seen_ids.reserve(reserve_count);
 
         for (std::uint64_t i = 0; i < live_count; ++i) {
+            constexpr std::uint64_t kSerializedEntryHeaderSize =
+                sizeof(StringId) + sizeof(std::uint64_t);
+            if (remaining && *remaining < kSerializedEntryHeaderSize) {
+                throw std::runtime_error("serialized dictionary entry header is truncated");
+            }
             const auto id = detail::read_pod<StringId>(in);
             const auto size = detail::read_pod<std::uint64_t>(in);
+            if (remaining) {
+                *remaining -= kSerializedEntryHeaderSize;
+            }
             if (id >= next_id || size == 0 || size > std::numeric_limits<std::uint32_t>::max()) {
                 throw std::runtime_error("invalid serialized dictionary entry");
             }
-            const auto value = detail::read_string(in, static_cast<std::size_t>(size));
+            if (remaining && size > *remaining) {
+                throw std::runtime_error("serialized dictionary string exceeds remaining payload");
+            }
+            const auto value = remaining
+                                   ? detail::read_string(in, static_cast<std::size_t>(size))
+                                   : detail::read_string_incremental(in, static_cast<std::size_t>(size));
+            if (remaining) {
+                *remaining -= size;
+            }
             if (!seen_ids.insert(id).second || !seen_values.insert(value).second) {
                 throw std::runtime_error("duplicate serialized dictionary entry");
             }
@@ -403,20 +428,45 @@ public:
         }
         const auto stored_fingerprint =
             version >= 3 ? detail::read_pod<std::uint64_t>(in) : 0;
+        auto remaining = detail::remaining_bytes(in);
+        constexpr std::uint64_t kMinimumSerializedEntrySize =
+            sizeof(StringId) + sizeof(std::uint64_t) + 1;
+        if (remaining && live_count > *remaining / kMinimumSerializedEntrySize) {
+            throw std::runtime_error("serialized dictionary entry count exceeds remaining payload");
+        }
+        constexpr std::size_t kMaximumInitialReserve = 65536;
+        const auto reserve_count = static_cast<std::size_t>(
+            std::min<std::uint64_t>(live_count, kMaximumInitialReserve));
         std::vector<BaseSegment::BuildItem> items;
-        items.reserve(static_cast<std::size_t>(live_count));
+        items.reserve(reserve_count);
         std::unordered_set<std::string> seen_values;
-        seen_values.reserve(static_cast<std::size_t>(live_count));
+        seen_values.reserve(reserve_count);
         std::unordered_set<StringId> seen_ids;
-        seen_ids.reserve(static_cast<std::size_t>(live_count));
+        seen_ids.reserve(reserve_count);
 
         for (std::uint64_t i = 0; i < live_count; ++i) {
+            constexpr std::uint64_t kSerializedEntryHeaderSize =
+                sizeof(StringId) + sizeof(std::uint64_t);
+            if (remaining && *remaining < kSerializedEntryHeaderSize) {
+                throw std::runtime_error("serialized dictionary entry header is truncated");
+            }
             const auto id = detail::read_pod<StringId>(in);
             const auto size = detail::read_pod<std::uint64_t>(in);
+            if (remaining) {
+                *remaining -= kSerializedEntryHeaderSize;
+            }
             if (id >= next_id || size == 0 || size > std::numeric_limits<std::uint32_t>::max()) {
                 throw std::runtime_error("invalid serialized dictionary entry");
             }
-            const auto value = detail::read_string(in, static_cast<std::size_t>(size));
+            if (remaining && size > *remaining) {
+                throw std::runtime_error("serialized dictionary string exceeds remaining payload");
+            }
+            const auto value = remaining
+                                   ? detail::read_string(in, static_cast<std::size_t>(size))
+                                   : detail::read_string_incremental(in, static_cast<std::size_t>(size));
+            if (remaining) {
+                *remaining -= size;
+            }
             if (!seen_ids.insert(id).second || !seen_values.insert(value).second) {
                 throw std::runtime_error("duplicate serialized dictionary entry");
             }

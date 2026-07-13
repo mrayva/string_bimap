@@ -7,6 +7,7 @@
 #include <fstream>
 #include <istream>
 #include <limits>
+#include <optional>
 #include <ostream>
 #include <stdexcept>
 #include <string>
@@ -59,6 +60,43 @@ inline std::string read_string(std::istream& in, std::size_t size) {
         }
     }
     return value;
+}
+
+inline std::string read_string_incremental(std::istream& in, std::size_t size) {
+    constexpr std::size_t kChunkSize = 64 * 1024;
+    std::array<char, kChunkSize> buffer{};
+    std::string value;
+    value.reserve(size < kChunkSize ? size : kChunkSize);
+    while (value.size() < size) {
+        const auto remaining = size - value.size();
+        const auto chunk_size = remaining < buffer.size() ? remaining : buffer.size();
+        in.read(buffer.data(), static_cast<std::streamsize>(chunk_size));
+        if (!in) {
+            throw std::runtime_error("failed to read serialized string payload");
+        }
+        value.append(buffer.data(), chunk_size);
+    }
+    return value;
+}
+
+inline std::optional<std::uint64_t> remaining_bytes(std::istream& in) {
+    const auto original_state = in.rdstate();
+    const auto current = in.tellg();
+    if (current == std::istream::pos_type(-1)) {
+        in.clear(original_state);
+        return std::nullopt;
+    }
+
+    in.seekg(0, std::ios::end);
+    const auto end = in.tellg();
+    in.clear();
+    in.seekg(current);
+    if (!in || end == std::istream::pos_type(-1) || end < current) {
+        in.clear(original_state);
+        return std::nullopt;
+    }
+    in.clear(original_state);
+    return static_cast<std::uint64_t>(end - current);
 }
 
 inline std::string compact_trie_sidecar_path(const std::string& path) {

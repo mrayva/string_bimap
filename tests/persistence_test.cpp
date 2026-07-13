@@ -1,4 +1,6 @@
+#include <cstdint>
 #include <fstream>
+#include <limits>
 #include <sstream>
 #include <string>
 #include <unordered_map>
@@ -8,6 +10,42 @@
 namespace {
 
 using namespace string_bimap_test;
+
+std::string serialized_fixture() {
+    StringBimap dict;
+    (void)dict.insert("alpha");
+    (void)dict.insert("beta");
+    (void)dict.insert("gamma");
+    std::ostringstream out(std::ios::binary);
+    dict.save(out);
+    return out.str();
+}
+
+bool load_throws(const std::string& bytes) {
+    std::istringstream in(bytes, std::ios::binary);
+    try {
+        (void)StringBimap::load(in);
+        return false;
+    } catch (const std::exception&) {
+        return true;
+    }
+}
+
+class NonSeekableStringBuffer : public std::stringbuf {
+public:
+    explicit NonSeekableStringBuffer(const std::string& bytes)
+        : std::stringbuf(bytes, std::ios::in | std::ios::binary) {}
+
+protected:
+    pos_type seekoff(off_type, std::ios_base::seekdir,
+                     std::ios_base::openmode) override {
+        return pos_type(off_type(-1));
+    }
+
+    pos_type seekpos(pos_type, std::ios_base::openmode) override {
+        return pos_type(off_type(-1));
+    }
+};
 
 void test_serialization_round_trip_stream(BackendProfile profile) {
     StringBimap dict(0, profile);
@@ -218,6 +256,84 @@ void test_invalid_live_count_is_rejected() {
     expect(threw, "live counts outside the serialized ID range should be rejected");
 }
 
+void test_every_truncated_snapshot_is_rejected() {
+    const auto bytes = serialized_fixture();
+    for (std::size_t size = 0; size < bytes.size(); ++size) {
+        expect(load_throws(bytes.substr(0, size)), "every truncated logical snapshot should be rejected");
+    }
+}
+
+void test_single_bit_snapshot_corruption_is_rejected() {
+    const auto bytes = serialized_fixture();
+    for (std::size_t offset = 0; offset < bytes.size(); ++offset) {
+        auto corrupted = bytes;
+        corrupted[offset] = static_cast<char>(
+            static_cast<unsigned char>(corrupted[offset]) ^ 0x80U);
+        expect(load_throws(corrupted), "single-bit logical snapshot corruption should be rejected");
+    }
+}
+
+void test_claimed_payload_sizes_are_checked_before_allocation() {
+    auto make_header = [](StringId next_id, std::uint64_t live_count) {
+        std::ostringstream out(std::ios::binary);
+        string_bimap::detail::write_bytes(out, string_bimap::detail::kFileMagic.data(),
+                                          string_bimap::detail::kFileMagic.size());
+        string_bimap::detail::write_pod(out, string_bimap::detail::kFormatVersion);
+        string_bimap::detail::write_pod(out, next_id);
+        string_bimap::detail::write_pod(out, BackendProfile::FastLookup);
+        string_bimap::detail::write_pod(out, live_count);
+        string_bimap::detail::write_pod(out, std::uint64_t{0});
+        return out.str();
+    };
+
+    const auto maximum_id = std::numeric_limits<StringId>::max();
+    expect(load_throws(make_header(maximum_id, maximum_id)),
+           "entry count should be bounded by the remaining payload");
+
+    auto oversized_string = make_header(1, 1);
+    std::ostringstream entry(std::ios::binary);
+    string_bimap::detail::write_pod(entry, StringId{0});
+    string_bimap::detail::write_pod(
+        entry, static_cast<std::uint64_t>(std::numeric_limits<std::uint32_t>::max()));
+    oversized_string += entry.str();
+    expect(load_throws(oversized_string),
+           "string length should be bounded by the remaining payload");
+
+    NonSeekableStringBuffer buffer(oversized_string);
+    std::istream non_seekable(&buffer);
+    bool threw = false;
+    try {
+        (void)StringBimap::load(non_seekable);
+    } catch (const std::exception&) {
+        threw = true;
+    }
+    expect(threw, "non-seekable streams should reject truncated strings without full allocation");
+}
+
+void test_corrupt_native_snapshot_falls_back_to_logical_data() {
+    const std::string path = "/tmp/string_bimap_corrupt_native.bin";
+    remove_all_sidecars(path);
+    StringBimap dict;
+    const auto alpha = dict.insert("alpha");
+    (void)dict.insert("beta");
+    dict.compact();
+    (void)dict.insert("gamma");
+    dict.save(path);
+
+    for (const auto& sidecar : {path + ".native.state", path + ".native.base",
+                                path + ".native.delta"}) {
+        {
+            std::ofstream out(sidecar, std::ios::binary | std::ios::trunc);
+            out << "corrupt";
+        }
+        auto restored = StringBimap::load(path);
+        expect(restored.find_id("alpha").value() == alpha,
+               "corrupt native sidecars should fall back to logical data");
+        dict.save(path);
+    }
+    remove_all_sidecars(path);
+}
+
 }  // namespace
 
 int main() {
@@ -230,4 +346,8 @@ int main() {
     test_save_compacted_preserves_ids_and_sidecars();
     test_stale_native_and_compact_sidecars_fall_back();
     test_invalid_live_count_is_rejected();
+    test_every_truncated_snapshot_is_rejected();
+    test_single_bit_snapshot_corruption_is_rejected();
+    test_claimed_payload_sizes_are_checked_before_allocation();
+    test_corrupt_native_snapshot_falls_back_to_logical_data();
 }
