@@ -59,6 +59,25 @@ jobs:
       - name: Test
         run: ctest --test-dir build --output-on-failure
 
+      - name: Install
+        run: cmake --install build --prefix "$RUNNER_TEMP/string-bimap-install"
+
+      - name: Configure installed-package consumer
+        env:
+          CC: ${{ matrix.cc }}
+          CXX: ${{ matrix.cxx }}
+        run: >-
+          cmake -S tests/package_consumer -B consumer-build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_CXX_STANDARD=${{ matrix.standard }}
+          -DCMAKE_CXX_STANDARD_REQUIRED=ON
+          -DCMAKE_PREFIX_PATH="$RUNNER_TEMP/string-bimap-install"
+
+      - name: Test installed-package consumer
+        run: |
+          cmake --build consumer-build --parallel 2
+          ctest --test-dir consumer-build --output-on-failure
+
   sanitizers:
     name: Sanitizers (Clang, C++20)
     runs-on: ubuntu-latest
@@ -149,3 +168,23 @@ jobs:
 
       - name: Install
         run: cmake --install build --prefix "$RUNNER_TEMP/string-bimap-install"
+
+      - name: Configure installed-package consumer
+        env:
+          CC: ${{ matrix.cc }}
+          CXX: ${{ matrix.cxx }}
+        run: >-
+          cmake -S tests/package_consumer -B consumer-build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_CXX_STANDARD=${{ matrix.standard }}
+          -DCMAKE_CXX_STANDARD_REQUIRED=ON
+          -DCMAKE_TOOLCHAIN_FILE="$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
+          -DVCPKG_MANIFEST_DIR="$GITHUB_WORKSPACE"
+          -DCMAKE_PREFIX_PATH="$RUNNER_TEMP/string-bimap-install"
+          -DSTRING_BIMAP_ARRAY_HASH_INCLUDE_DIR="$RUNNER_TEMP/array-hash/include"
+          -DSTRING_BIMAP_EXPECT_OPTIONAL_BACKENDS=ON
+
+      - name: Test installed-package consumer
+        run: |
+          cmake --build consumer-build --parallel 2
+          ctest --test-dir consumer-build --output-on-failure
