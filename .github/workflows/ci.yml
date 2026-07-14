@@ -118,6 +118,43 @@ jobs:
           UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
         run: ctest --test-dir build --output-on-failure
 
+  static-analysis:
+    name: Static analysis (clang-tidy-18)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Configure compilation database
+        env:
+          CC: clang-18
+          CXX: clang++-18
+        run: >-
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Debug
+          -DCMAKE_CXX_STANDARD=20
+          -DCMAKE_CXX_STANDARD_REQUIRED=ON
+          -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+          -DSTRING_BIMAP_BUILD_EXAMPLES=ON
+          -DSTRING_BIMAP_BUILD_TOOLS=OFF
+          -DSTRING_BIMAP_BUILD_TESTS=ON
+          -DSTRING_BIMAP_BUILD_BENCHMARKS=OFF
+          -DSTRING_BIMAP_USE_XCDAT=OFF
+          -DSTRING_BIMAP_USE_MARISA=OFF
+          -DSTRING_BIMAP_USE_HAT_TRIE=OFF
+          -DSTRING_BIMAP_USE_ARRAY_HASH=OFF
+          -DSTRING_BIMAP_USE_PTHASH=OFF
+
+      - name: Run clang-tidy
+        run: >-
+          clang-tidy-18 -p build --quiet
+          tests/core_test.cpp
+          tests/persistence_test.cpp
+          tests/query_test.cpp
+          examples/basic.cpp
+
   integrations:
     name: Integrations (${{ matrix.compiler }}, C++${{ matrix.standard }})
     runs-on: ubuntu-latest

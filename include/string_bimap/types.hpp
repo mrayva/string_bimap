@@ -87,7 +87,7 @@ struct CompactionPolicy {
     double max_delta_fraction = 0.15;
     std::size_t min_tombstone_ids = 1024;
     double max_tombstone_fraction = 0.10;
-    std::size_t min_delta_bytes = 1 << 20;
+    std::size_t min_delta_bytes = std::size_t{1} << 20U;
 };
 
 using StringView = std::string_view;

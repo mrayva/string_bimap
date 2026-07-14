@@ -1,0 +1,14 @@
+Checks: >
+  -*,
+  bugprone-*,
+  performance-*,
+  portability-*,
+  -bugprone-branch-clone,
+  -bugprone-exception-escape,
+  -bugprone-random-generator-seed,
+  -bugprone-sizeof-container,
+  -bugprone-unchecked-optional-access,
+  -portability-avoid-pragma-once
+WarningsAsErrors: '*'
+HeaderFilterRegex: '(^|.*/)include/string_bimap/.*'
+SystemHeaders: false

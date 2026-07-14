@@ -150,7 +150,7 @@ inline unsigned read_json_hex_quad(std::istream& in) {
     }
     unsigned value = 0;
     for (char digit : hex) {
-        value <<= 4;
+        value <<= 4U;
         if (digit >= '0' && digit <= '9') {
             value |= static_cast<unsigned>(digit - '0');
         } else if (digit >= 'a' && digit <= 'f') {
@@ -165,20 +165,20 @@ inline unsigned read_json_hex_quad(std::istream& in) {
 }
 
 inline void append_utf8(std::string& out, unsigned codepoint) {
-    if (codepoint <= 0x7F) {
+    if (codepoint <= 0x7FU) {
         out.push_back(static_cast<char>(codepoint));
-    } else if (codepoint <= 0x7FF) {
-        out.push_back(static_cast<char>(0xC0 | (codepoint >> 6)));
-        out.push_back(static_cast<char>(0x80 | (codepoint & 0x3F)));
-    } else if (codepoint <= 0xFFFF) {
-        out.push_back(static_cast<char>(0xE0 | (codepoint >> 12)));
-        out.push_back(static_cast<char>(0x80 | ((codepoint >> 6) & 0x3F)));
-        out.push_back(static_cast<char>(0x80 | (codepoint & 0x3F)));
+    } else if (codepoint <= 0x7FFU) {
+        out.push_back(static_cast<char>(0xC0U | (codepoint >> 6U)));
+        out.push_back(static_cast<char>(0x80U | (codepoint & 0x3FU)));
+    } else if (codepoint <= 0xFFFFU) {
+        out.push_back(static_cast<char>(0xE0U | (codepoint >> 12U)));
+        out.push_back(static_cast<char>(0x80U | ((codepoint >> 6U) & 0x3FU)));
+        out.push_back(static_cast<char>(0x80U | (codepoint & 0x3FU)));
     } else {
-        out.push_back(static_cast<char>(0xF0 | (codepoint >> 18)));
-        out.push_back(static_cast<char>(0x80 | ((codepoint >> 12) & 0x3F)));
-        out.push_back(static_cast<char>(0x80 | ((codepoint >> 6) & 0x3F)));
-        out.push_back(static_cast<char>(0x80 | (codepoint & 0x3F)));
+        out.push_back(static_cast<char>(0xF0U | (codepoint >> 18U)));
+        out.push_back(static_cast<char>(0x80U | ((codepoint >> 12U) & 0x3FU)));
+        out.push_back(static_cast<char>(0x80U | ((codepoint >> 6U) & 0x3FU)));
+        out.push_back(static_cast<char>(0x80U | (codepoint & 0x3FU)));
     }
 }
 
@@ -229,16 +229,16 @@ inline std::string parse_json_string(std::istream& in) {
                 break;
             case 'u': {
                 unsigned codepoint = read_json_hex_quad(in);
-                if (codepoint >= 0xD800 && codepoint <= 0xDBFF) {
+                if (codepoint >= 0xD800U && codepoint <= 0xDBFFU) {
                     if (in.get() != '\\' || in.get() != 'u') {
                         throw std::runtime_error("JSON high surrogate is missing a low surrogate");
                     }
                     const unsigned low = read_json_hex_quad(in);
-                    if (low < 0xDC00 || low > 0xDFFF) {
+                    if (low < 0xDC00U || low > 0xDFFFU) {
                         throw std::runtime_error("invalid JSON low surrogate");
                     }
-                    codepoint = 0x10000 + ((codepoint - 0xD800) << 10) + (low - 0xDC00);
-                } else if (codepoint >= 0xDC00 && codepoint <= 0xDFFF) {
+                    codepoint = 0x10000U + ((codepoint - 0xD800U) << 10U) + (low - 0xDC00U);
+                } else if (codepoint >= 0xDC00U && codepoint <= 0xDFFFU) {
                     throw std::runtime_error("unexpected JSON low surrogate");
                 }
                 append_utf8(out, codepoint);

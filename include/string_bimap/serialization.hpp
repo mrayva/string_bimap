@@ -63,7 +63,7 @@ inline std::string read_string(std::istream& in, std::size_t size) {
 }
 
 inline std::string read_string_incremental(std::istream& in, std::size_t size) {
-    constexpr std::size_t kChunkSize = 64 * 1024;
+    constexpr std::size_t kChunkSize = std::size_t{64} * 1024;
     std::array<char, kChunkSize> buffer{};
     std::string value;
     value.reserve(size < kChunkSize ? size : kChunkSize);
