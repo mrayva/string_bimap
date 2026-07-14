@@ -84,6 +84,10 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
+When included with `add_subdirectory()`, examples, tools, tests, and benchmarks
+default to `OFF`. A parent project can enable any of them explicitly through the
+corresponding `STRING_BIMAP_BUILD_*` option.
+
 Optional backends:
 
 - `xcdat.hpp` enables `CompactMemory`

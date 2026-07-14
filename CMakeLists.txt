@@ -2,10 +2,15 @@ cmake_minimum_required(VERSION 3.20)
 
 project(string_bimap LANGUAGES CXX VERSION 0.1.0)
 
-option(STRING_BIMAP_BUILD_EXAMPLES "Build examples" ON)
-option(STRING_BIMAP_BUILD_TOOLS "Build command-line tools" ON)
-option(STRING_BIMAP_BUILD_TESTS "Build test executables" ON)
-option(STRING_BIMAP_BUILD_BENCHMARKS "Build benchmark executables" ON)
+set(_STRING_BIMAP_DEVELOPMENT_DEFAULT OFF)
+if(CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR)
+    set(_STRING_BIMAP_DEVELOPMENT_DEFAULT ON)
+endif()
+
+option(STRING_BIMAP_BUILD_EXAMPLES "Build examples" ${_STRING_BIMAP_DEVELOPMENT_DEFAULT})
+option(STRING_BIMAP_BUILD_TOOLS "Build command-line tools" ${_STRING_BIMAP_DEVELOPMENT_DEFAULT})
+option(STRING_BIMAP_BUILD_TESTS "Build test executables" ${_STRING_BIMAP_DEVELOPMENT_DEFAULT})
+option(STRING_BIMAP_BUILD_BENCHMARKS "Build benchmark executables" ${_STRING_BIMAP_DEVELOPMENT_DEFAULT})
 option(STRING_BIMAP_BUILD_FUZZERS "Build libFuzzer targets (Clang only)" OFF)
 option(STRING_BIMAP_USE_XCDAT "Enable xcdat-backed static index when xcdat headers are available" ON)
 option(STRING_BIMAP_USE_MARISA "Enable marisa-trie-backed static index when marisa headers and library are available" ON)
@@ -15,6 +20,7 @@ option(STRING_BIMAP_USE_PTHASH "Enable the optional pthash-backed static runtime
 
 set(STRING_BIMAP_ARRAY_HASH_ROOT "" CACHE PATH "Optional array-hash source root")
 set(STRING_BIMAP_PTHASH_ROOT "" CACHE PATH "Optional pthash source root")
+unset(_STRING_BIMAP_DEVELOPMENT_DEFAULT)
 
 add_library(string_bimap INTERFACE)
 add_library(string_bimap::string_bimap ALIAS string_bimap)

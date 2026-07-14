@@ -79,6 +79,26 @@ jobs:
           cmake --build consumer-build --parallel 2
           ctest --test-dir consumer-build --output-on-failure
 
+      - name: Configure vendored-subproject consumer
+        env:
+          CC: ${{ matrix.cc }}
+          CXX: ${{ matrix.cxx }}
+        run: >-
+          cmake -S tests/subproject_consumer -B subproject-build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_CXX_STANDARD=${{ matrix.standard }}
+          -DCMAKE_CXX_STANDARD_REQUIRED=ON
+          -DSTRING_BIMAP_USE_XCDAT=OFF
+          -DSTRING_BIMAP_USE_MARISA=OFF
+          -DSTRING_BIMAP_USE_HAT_TRIE=OFF
+          -DSTRING_BIMAP_USE_ARRAY_HASH=OFF
+          -DSTRING_BIMAP_USE_PTHASH=OFF
+
+      - name: Test vendored-subproject consumer
+        run: |
+          cmake --build subproject-build --parallel 2
+          ctest --test-dir subproject-build --output-on-failure
+
   sanitizers:
     name: Sanitizers (Clang, C++20)
     runs-on: ubuntu-latest
