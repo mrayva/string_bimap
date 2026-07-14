@@ -155,6 +155,44 @@ jobs:
           tests/query_test.cpp
           examples/basic.cpp
 
+  fuzzing:
+    name: Snapshot fuzzing (Clang 18)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Configure
+        env:
+          CC: clang-18
+          CXX: clang++-18
+        run: >-
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Debug
+          -DCMAKE_CXX_STANDARD=20
+          -DCMAKE_CXX_STANDARD_REQUIRED=ON
+          -DSTRING_BIMAP_BUILD_EXAMPLES=OFF
+          -DSTRING_BIMAP_BUILD_TOOLS=OFF
+          -DSTRING_BIMAP_BUILD_TESTS=OFF
+          -DSTRING_BIMAP_BUILD_BENCHMARKS=OFF
+          -DSTRING_BIMAP_BUILD_FUZZERS=ON
+          -DSTRING_BIMAP_USE_XCDAT=OFF
+          -DSTRING_BIMAP_USE_MARISA=OFF
+          -DSTRING_BIMAP_USE_HAT_TRIE=OFF
+          -DSTRING_BIMAP_USE_ARRAY_HASH=OFF
+          -DSTRING_BIMAP_USE_PTHASH=OFF
+
+      - name: Build
+        run: cmake --build build --target string_bimap_load_fuzzer --parallel 2
+
+      - name: Fuzz logical snapshot loading
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+        run: build/string_bimap_load_fuzzer -runs=10000 -max_len=4096 -timeout=5
+
   integrations:
     name: Integrations (${{ matrix.compiler }}, C++${{ matrix.standard }})
     runs-on: ubuntu-latest

@@ -6,6 +6,7 @@ option(STRING_BIMAP_BUILD_EXAMPLES "Build examples" ON)
 option(STRING_BIMAP_BUILD_TOOLS "Build command-line tools" ON)
 option(STRING_BIMAP_BUILD_TESTS "Build test executables" ON)
 option(STRING_BIMAP_BUILD_BENCHMARKS "Build benchmark executables" ON)
+option(STRING_BIMAP_BUILD_FUZZERS "Build libFuzzer targets (Clang only)" OFF)
 option(STRING_BIMAP_USE_XCDAT "Enable xcdat-backed static index when xcdat headers are available" ON)
 option(STRING_BIMAP_USE_MARISA "Enable marisa-trie-backed static index when marisa headers and library are available" ON)
 option(STRING_BIMAP_USE_HAT_TRIE "Enable hat-trie-backed mutable index when hat-trie headers are available" ON)
@@ -238,6 +239,23 @@ if(STRING_BIMAP_BUILD_TESTS)
             COMMAND string_bimap_pthash_tool_test $<TARGET_FILE:string_bimap_pthash_tool>
         )
     endif()
+endif()
+
+if(STRING_BIMAP_BUILD_FUZZERS)
+    if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        message(FATAL_ERROR "STRING_BIMAP_BUILD_FUZZERS requires Clang")
+    endif()
+
+    add_executable(string_bimap_load_fuzzer tests/fuzz_load.cpp)
+    target_link_libraries(string_bimap_load_fuzzer PRIVATE string_bimap::string_bimap)
+    target_compile_options(
+        string_bimap_load_fuzzer
+        PRIVATE -fsanitize=fuzzer,address,undefined -fno-omit-frame-pointer
+    )
+    target_link_options(
+        string_bimap_load_fuzzer
+        PRIVATE -fsanitize=fuzzer,address,undefined -fno-omit-frame-pointer
+    )
 endif()
 
 if(STRING_BIMAP_BUILD_BENCHMARKS)
