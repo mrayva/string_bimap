@@ -1,5 +1,6 @@
 #include <cstdint>
 #include <fstream>
+#include <initializer_list>
 #include <limits>
 #include <sstream>
 #include <string>
@@ -70,6 +71,34 @@ void test_serialization_round_trip_stream(BackendProfile profile) {
     expect(restored.find_id("delta").value() == delta_id, "delta id should round-trip");
     expect(!restored.contains("beta"), "deleted key should remain absent after load");
     expect(!restored.contains_id(beta_id), "deleted id hole should remain absent after load");
+}
+
+void test_logical_wire_format_is_little_endian() {
+    StringBimap dict;
+    (void)dict.insert("x");
+
+    std::ostringstream out(std::ios::binary);
+    dict.save(out);
+    const auto bytes = out.str();
+
+    const auto expect_bytes = [&](std::size_t offset,
+                                  std::initializer_list<unsigned char> expected,
+                                  const std::string& message) {
+        const auto presence_message = message + " should be present";
+        expect(offset + expected.size() <= bytes.size(), presence_message.c_str());
+        std::size_t index = offset;
+        for (const auto byte : expected) {
+            expect(static_cast<unsigned char>(bytes[index++]) == byte, message.c_str());
+        }
+    };
+
+    expect_bytes(8, {4, 0, 0, 0}, "format version should use little-endian encoding");
+    expect_bytes(12, {1, 0, 0, 0}, "next ID should use little-endian encoding");
+    expect_bytes(17, {1, 0, 0, 0, 0, 0, 0, 0},
+                 "live count should use little-endian encoding");
+    expect_bytes(33, {0, 0, 0, 0}, "entry ID should use little-endian encoding");
+    expect_bytes(37, {1, 0, 0, 0, 0, 0, 0, 0},
+                 "string size should use little-endian encoding");
 }
 
 void test_serialization_round_trip_file(BackendProfile profile) {
@@ -342,6 +371,7 @@ int main() {
         test_serialization_round_trip_file(profile);
         test_native_snapshot_round_trip_file(profile);
     });
+    test_logical_wire_format_is_little_endian();
     test_compact_native_sidecars();
     test_save_compacted_preserves_ids_and_sidecars();
     test_stale_native_and_compact_sidecars_fall_back();

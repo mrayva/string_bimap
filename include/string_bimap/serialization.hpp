@@ -17,14 +17,51 @@
 namespace string_bimap::detail {
 
 inline constexpr std::array<char, 8> kFileMagic = {'S', 'T', 'R', 'B', 'M', 'A', 'P', '1'};
-inline constexpr std::uint32_t kFormatVersion = 3;
+inline constexpr std::uint32_t kFormatVersion = 4;
 inline constexpr std::array<char, 8> kNativeStateMagic = {'S', 'B', 'N', 'A', 'T', 'I', 'V', 'E'};
-inline constexpr std::uint32_t kNativeStateVersion = 2;
+inline constexpr std::uint32_t kNativeStateVersion = 3;
+
+template <class T, bool = std::is_enum<T>::value>
+struct SerializedValueType {
+    using type = T;
+};
+
+template <class T>
+struct SerializedValueType<T, true> {
+    using type = typename std::underlying_type<T>::type;
+};
+
+template <class T>
+using SerializedValue = typename SerializedValueType<T>::type;
+
+template <class T>
+using SerializedUnsigned = typename std::make_unsigned<SerializedValue<T>>::type;
+
+template <class T>
+constexpr SerializedUnsigned<T> serialized_unsigned(T value) noexcept {
+    static_assert(std::is_integral<SerializedValue<T>>::value,
+                  "serialized values must be integral or enum types");
+    return static_cast<SerializedUnsigned<T>>(static_cast<SerializedValue<T>>(value));
+}
+
+template <class T, class Func>
+void for_each_serialized_byte(T value, Func&& func) {
+    static_assert(sizeof(SerializedValue<T>) <= sizeof(std::uint64_t),
+                  "serialized values wider than 64 bits are unsupported");
+    auto encoded = static_cast<std::uint64_t>(serialized_unsigned(value));
+    for (std::size_t i = 0; i < sizeof(SerializedValue<T>); ++i) {
+        func(static_cast<unsigned char>(encoded & std::uint64_t{0xFF}));
+        encoded >>= 8U;
+    }
+}
 
 template <class T>
 void write_pod(std::ostream& out, const T& value) {
-    static_assert(std::is_trivially_copyable<T>::value, "T must be trivially copyable");
-    out.write(reinterpret_cast<const char*>(&value), sizeof(T));
+    std::array<unsigned char, sizeof(SerializedValue<T>)> bytes{};
+    std::size_t offset = 0;
+    for_each_serialized_byte(value, [&](unsigned char byte) { bytes[offset++] = byte; });
+    out.write(reinterpret_cast<const char*>(bytes.data()),
+              static_cast<std::streamsize>(bytes.size()));
     if (!out) {
         throw std::runtime_error("failed to write serialized dictionary data");
     }
@@ -32,13 +69,17 @@ void write_pod(std::ostream& out, const T& value) {
 
 template <class T>
 T read_pod(std::istream& in) {
-    static_assert(std::is_trivially_copyable<T>::value, "T must be trivially copyable");
-    T value{};
-    in.read(reinterpret_cast<char*>(&value), sizeof(T));
+    std::array<unsigned char, sizeof(SerializedValue<T>)> bytes{};
+    in.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
     if (!in) {
         throw std::runtime_error("failed to read serialized dictionary data");
     }
-    return value;
+    std::uint64_t value = 0;
+    for (std::size_t i = 0; i < bytes.size(); ++i) {
+        value |= static_cast<std::uint64_t>(bytes[i]) << (i * 8U);
+    }
+    return static_cast<T>(static_cast<SerializedValue<T>>(
+        static_cast<SerializedUnsigned<T>>(value)));
 }
 
 inline void write_bytes(std::ostream& out, const char* data, std::size_t size) {

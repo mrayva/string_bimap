@@ -61,10 +61,13 @@ In practice, start with:
 - `compact()` preserves all live IDs.
 - Empty strings are ignored and never stored.
 - `save()`/`load()` preserve logical state and the selected backend profile.
+- Logical snapshots use a versioned, little-endian wire format.
 - `save(path)` writes native sidecars for the current in-memory state.
 - `load(path)` verifies native sidecars against the logical snapshot and falls
   back to a logical rebuild when they are missing, stale, or corrupt.
 - Stream `save(std::ostream&)` / `load(std::istream&)` remain logical-only.
+- Native sidecars are local acceleration artifacts; the logical snapshot is the
+  portable source of truth and is used when sidecars cannot be loaded.
 
 ## Lifetime And Safety
 

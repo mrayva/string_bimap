@@ -500,7 +500,9 @@ private:
 
     template <class T>
     static void hash_value(std::uint64_t& hash, const T& value) noexcept {
-        hash_bytes(hash, &value, sizeof(value));
+        detail::for_each_serialized_byte(value, [&](unsigned char byte) {
+            hash_bytes(hash, &byte, sizeof(byte));
+        });
     }
 
     [[nodiscard]] static std::uint64_t fingerprint(
