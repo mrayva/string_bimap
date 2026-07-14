@@ -31,7 +31,7 @@ if(STRING_BIMAP_USE_XCDAT)
     if(STRING_BIMAP_XCDAT_INCLUDE_DIR)
         target_include_directories(
             string_bimap
-            INTERFACE
+            SYSTEM INTERFACE
                 $<BUILD_INTERFACE:${STRING_BIMAP_XCDAT_INCLUDE_DIR}>
         )
         target_compile_definitions(string_bimap INTERFACE $<BUILD_INTERFACE:STRING_BIMAP_HAS_XCDAT=1>)
@@ -44,7 +44,7 @@ if(STRING_BIMAP_USE_MARISA)
     if(STRING_BIMAP_MARISA_INCLUDE_DIR AND STRING_BIMAP_MARISA_LIBRARY)
         target_include_directories(
             string_bimap
-            INTERFACE
+            SYSTEM INTERFACE
                 $<BUILD_INTERFACE:${STRING_BIMAP_MARISA_INCLUDE_DIR}>
         )
         target_link_libraries(
@@ -61,7 +61,7 @@ if(STRING_BIMAP_USE_HAT_TRIE)
     if(STRING_BIMAP_HAT_TRIE_INCLUDE_DIR)
         target_include_directories(
             string_bimap
-            INTERFACE
+            SYSTEM INTERFACE
                 $<BUILD_INTERFACE:${STRING_BIMAP_HAT_TRIE_INCLUDE_DIR}>
         )
         target_compile_definitions(string_bimap INTERFACE $<BUILD_INTERFACE:STRING_BIMAP_HAS_HAT_TRIE=1>)
@@ -83,7 +83,7 @@ if(STRING_BIMAP_USE_ARRAY_HASH)
     if(STRING_BIMAP_ARRAY_HASH_INCLUDE_DIR)
         target_include_directories(
             string_bimap
-            INTERFACE
+            SYSTEM INTERFACE
                 $<BUILD_INTERFACE:${STRING_BIMAP_ARRAY_HASH_INCLUDE_DIR}>
         )
         target_compile_definitions(string_bimap INTERFACE $<BUILD_INTERFACE:STRING_BIMAP_HAS_ARRAY_HASH=1>)
@@ -94,29 +94,54 @@ if(STRING_BIMAP_USE_PTHASH)
     if(STRING_BIMAP_PTHASH_ROOT AND EXISTS "${STRING_BIMAP_PTHASH_ROOT}/CMakeLists.txt")
         if(EXISTS "${STRING_BIMAP_PTHASH_ROOT}/external/bits/CMakeLists.txt")
             add_subdirectory("${STRING_BIMAP_PTHASH_ROOT}" "${CMAKE_CURRENT_BINARY_DIR}/pthash" EXCLUDE_FROM_ALL)
-            if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND NOT APPLE)
-                # PTHash v2 and bits force libc++ headers without matching linker flags.
-                foreach(_string_bimap_pthash_target IN ITEMS PTHASH BITS)
-                    get_target_property(
-                        _string_bimap_pthash_compile_options
-                        ${_string_bimap_pthash_target}
-                        INTERFACE_COMPILE_OPTIONS
+            foreach(_string_bimap_pthash_target IN ITEMS PTHASH BITS ESSENTIALS)
+                get_target_property(
+                    _string_bimap_pthash_include_dirs
+                    ${_string_bimap_pthash_target}
+                    INTERFACE_INCLUDE_DIRECTORIES
+                )
+                if(_string_bimap_pthash_include_dirs)
+                    set_property(
+                        TARGET ${_string_bimap_pthash_target}
+                        PROPERTY INTERFACE_SYSTEM_INCLUDE_DIRECTORIES
+                                 "${_string_bimap_pthash_include_dirs}"
                     )
-                    if(_string_bimap_pthash_compile_options)
+                endif()
+            endforeach()
+
+            # PTHash's bits target exports project-local diagnostic flags to consumers.
+            foreach(_string_bimap_pthash_target IN ITEMS PTHASH BITS)
+                get_target_property(
+                    _string_bimap_pthash_compile_options
+                    ${_string_bimap_pthash_target}
+                    INTERFACE_COMPILE_OPTIONS
+                )
+                if(_string_bimap_pthash_compile_options)
+                    list(
+                        REMOVE_ITEM _string_bimap_pthash_compile_options
+                        -ggdb
+                        -Wall
+                        -Wextra
+                        -Wno-missing-braces
+                        -Wno-unknown-attributes
+                        -Wno-unused-function
+                    )
+                    if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND NOT APPLE)
+                        # PTHash v2 forces libc++ headers without matching linker flags.
                         list(REMOVE_ITEM _string_bimap_pthash_compile_options -stdlib=libc++)
-                        set_property(
-                            TARGET ${_string_bimap_pthash_target}
-                            PROPERTY INTERFACE_COMPILE_OPTIONS "${_string_bimap_pthash_compile_options}"
-                        )
                     endif()
-                endforeach()
-            endif()
+                    set_property(
+                        TARGET ${_string_bimap_pthash_target}
+                        PROPERTY INTERFACE_COMPILE_OPTIONS "${_string_bimap_pthash_compile_options}"
+                    )
+                endif()
+            endforeach()
             target_link_libraries(string_bimap INTERFACE $<BUILD_INTERFACE:PTHASH>)
             target_compile_definitions(string_bimap INTERFACE $<BUILD_INTERFACE:STRING_BIMAP_HAS_PTHASH=1>)
             if(EXISTS "${STRING_BIMAP_PTHASH_ROOT}/include/pthash.hpp")
                 target_include_directories(
                     string_bimap
-                    INTERFACE
+                    SYSTEM INTERFACE
                         $<BUILD_INTERFACE:${STRING_BIMAP_PTHASH_ROOT}/include>
                 )
                 target_compile_definitions(string_bimap INTERFACE $<BUILD_INTERFACE:STRING_BIMAP_PTHASH_V2=1>)

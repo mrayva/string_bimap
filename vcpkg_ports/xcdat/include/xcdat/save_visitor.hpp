@@ -28,7 +28,7 @@ class save_visitor {
 
     template <typename T>
     void visit(const T& obj) {
-        if constexpr (std::is_pod_v<T>) {
+        if constexpr (std::is_trivial_v<T> && std::is_standard_layout_v<T>) {
             m_ofs.write(reinterpret_cast<const char*>(&obj), sizeof(T));
         } else {
             const_cast<T&>(obj).visit(*this);

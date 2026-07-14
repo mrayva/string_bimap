@@ -154,6 +154,7 @@ jobs:
           -DCMAKE_CXX_STANDARD=${{ matrix.standard }}
           -DCMAKE_CXX_STANDARD_REQUIRED=ON
           -DCMAKE_TOOLCHAIN_FILE="$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
+          -DCMAKE_CXX_FLAGS='-Wall -Wextra -Wpedantic -Werror'
           -DSTRING_BIMAP_ARRAY_HASH_ROOT="$RUNNER_TEMP/array-hash"
           -DSTRING_BIMAP_PTHASH_ROOT="$RUNNER_TEMP/pthash"
           -DSTRING_BIMAP_BUILD_EXAMPLES=ON

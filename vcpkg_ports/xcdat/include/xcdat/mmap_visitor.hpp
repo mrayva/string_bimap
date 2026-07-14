@@ -23,7 +23,7 @@ class mmap_visitor {
 
     template <typename T>
     void visit(T& obj) {
-        if constexpr (std::is_pod_v<T>) {
+        if constexpr (std::is_trivial_v<T> && std::is_standard_layout_v<T>) {
             obj = *reinterpret_cast<const T*>(m_cur);
             m_cur += sizeof(T);
         } else {

@@ -28,7 +28,7 @@ class load_visitor {
 
     template <class T>
     void visit(T& obj) {
-        if constexpr (std::is_pod_v<T>) {
+        if constexpr (std::is_trivial_v<T> && std::is_standard_layout_v<T>) {
             m_ifs.read(reinterpret_cast<char*>(&obj), sizeof(T));
         } else {
             obj.visit(*this);
