@@ -312,84 +312,13 @@ public:
     // Loads a dictionary previously saved with save(). The loaded dictionary is
     // logically equivalent to the saved one, but its internal storage layout may differ.
     [[nodiscard]] static StringBimap load(std::istream& in) {
-        std::array<char, detail::kFileMagic.size()> magic{};
-        in.read(magic.data(), static_cast<std::streamsize>(magic.size()));
-        if (!in || magic != detail::kFileMagic) {
-            throw std::runtime_error("invalid serialized dictionary header");
-        }
-
-        const auto version = detail::read_pod<std::uint32_t>(in);
-        if (version < 1 || version > detail::kFormatVersion) {
-            throw std::runtime_error("unsupported serialized dictionary version");
-        }
-
-        const auto next_id = detail::read_pod<StringId>(in);
-        BackendProfile profile = BackendProfile::FastLookup;
-        if (version >= 2) {
-            profile = require_profile(detail::read_pod<std::uint8_t>(in));
-        }
-
-        StringBimap dict(0, profile);
-        dict.next_id_ = next_id;
-
-        const auto live_count = detail::read_pod<std::uint64_t>(in);
-        if (live_count > next_id) {
-            throw std::runtime_error("serialized dictionary live count exceeds its ID range");
-        }
-        const auto stored_fingerprint =
-            version >= 3 ? detail::read_pod<std::uint64_t>(in) : 0;
-        auto remaining = detail::remaining_bytes(in);
-        constexpr std::uint64_t kMinimumSerializedEntrySize =
-            sizeof(StringId) + sizeof(std::uint64_t) + 1;
-        if (remaining && live_count > *remaining / kMinimumSerializedEntrySize) {
-            throw std::runtime_error("serialized dictionary entry count exceeds remaining payload");
-        }
-        constexpr std::size_t kMaximumInitialReserve = 65536;
-        const auto reserve_count = static_cast<std::size_t>(
-            std::min<std::uint64_t>(live_count, kMaximumInitialReserve));
-        std::vector<BaseSegment::BuildItem> items;
-        items.reserve(reserve_count);
-        std::unordered_set<std::string> seen_values;
-        seen_values.reserve(reserve_count);
-        std::unordered_set<StringId> seen_ids;
-        seen_ids.reserve(reserve_count);
-
-        for (std::uint64_t i = 0; i < live_count; ++i) {
-            constexpr std::uint64_t kSerializedEntryHeaderSize =
-                sizeof(StringId) + sizeof(std::uint64_t);
-            if (remaining && *remaining < kSerializedEntryHeaderSize) {
-                throw std::runtime_error("serialized dictionary entry header is truncated");
-            }
-            const auto id = detail::read_pod<StringId>(in);
-            const auto size = detail::read_pod<std::uint64_t>(in);
-            if (remaining) {
-                *remaining -= kSerializedEntryHeaderSize;
-            }
-            if (id >= next_id || size == 0 || size > std::numeric_limits<std::uint32_t>::max()) {
-                throw std::runtime_error("invalid serialized dictionary entry");
-            }
-            if (remaining && size > *remaining) {
-                throw std::runtime_error("serialized dictionary string exceeds remaining payload");
-            }
-            const auto value = remaining
-                                   ? detail::read_string(in, static_cast<std::size_t>(size))
-                                   : detail::read_string_incremental(in, static_cast<std::size_t>(size));
-            if (remaining) {
-                *remaining -= size;
-            }
-            if (!seen_ids.insert(id).second || !seen_values.insert(value).second) {
-                throw std::runtime_error("duplicate serialized dictionary entry");
-            }
-            items.push_back(BaseSegment::BuildItem{id, value});
-        }
-        if (version >= 3 && fingerprint(next_id, profile, items) != stored_fingerprint) {
-            throw std::runtime_error("serialized dictionary fingerprint mismatch");
-        }
-
-        dict.base_.rebuild(std::move(items));
+        auto snapshot = load_logical_snapshot(in);
+        StringBimap dict(0, snapshot.profile);
+        dict.next_id_ = snapshot.next_id;
+        dict.base_.rebuild(std::move(snapshot.items));
         dict.delta_.clear();
         dict.tombstones_.clear();
-        dict.live_size_ = static_cast<std::size_t>(live_count);
+        dict.live_size_ = snapshot.live_size;
         return dict;
     }
 
@@ -402,79 +331,9 @@ public:
         if (!in) {
             throw std::runtime_error("failed to open file for dictionary deserialization: " + path);
         }
-        std::array<char, detail::kFileMagic.size()> magic{};
-        in.read(magic.data(), static_cast<std::streamsize>(magic.size()));
-        if (!in || magic != detail::kFileMagic) {
-            throw std::runtime_error("invalid serialized dictionary header");
-        }
-
-        const auto version = detail::read_pod<std::uint32_t>(in);
-        if (version < 1 || version > detail::kFormatVersion) {
-            throw std::runtime_error("unsupported serialized dictionary version");
-        }
-
-        const auto next_id = detail::read_pod<StringId>(in);
-        BackendProfile profile = BackendProfile::FastLookup;
-        if (version >= 2) {
-            profile = require_profile(detail::read_pod<std::uint8_t>(in));
-        }
-
-        StringBimap dict(0, profile);
-        dict.next_id_ = next_id;
-
-        const auto live_count = detail::read_pod<std::uint64_t>(in);
-        if (live_count > next_id) {
-            throw std::runtime_error("serialized dictionary live count exceeds its ID range");
-        }
-        const auto stored_fingerprint =
-            version >= 3 ? detail::read_pod<std::uint64_t>(in) : 0;
-        auto remaining = detail::remaining_bytes(in);
-        constexpr std::uint64_t kMinimumSerializedEntrySize =
-            sizeof(StringId) + sizeof(std::uint64_t) + 1;
-        if (remaining && live_count > *remaining / kMinimumSerializedEntrySize) {
-            throw std::runtime_error("serialized dictionary entry count exceeds remaining payload");
-        }
-        constexpr std::size_t kMaximumInitialReserve = 65536;
-        const auto reserve_count = static_cast<std::size_t>(
-            std::min<std::uint64_t>(live_count, kMaximumInitialReserve));
-        std::vector<BaseSegment::BuildItem> items;
-        items.reserve(reserve_count);
-        std::unordered_set<std::string> seen_values;
-        seen_values.reserve(reserve_count);
-        std::unordered_set<StringId> seen_ids;
-        seen_ids.reserve(reserve_count);
-
-        for (std::uint64_t i = 0; i < live_count; ++i) {
-            constexpr std::uint64_t kSerializedEntryHeaderSize =
-                sizeof(StringId) + sizeof(std::uint64_t);
-            if (remaining && *remaining < kSerializedEntryHeaderSize) {
-                throw std::runtime_error("serialized dictionary entry header is truncated");
-            }
-            const auto id = detail::read_pod<StringId>(in);
-            const auto size = detail::read_pod<std::uint64_t>(in);
-            if (remaining) {
-                *remaining -= kSerializedEntryHeaderSize;
-            }
-            if (id >= next_id || size == 0 || size > std::numeric_limits<std::uint32_t>::max()) {
-                throw std::runtime_error("invalid serialized dictionary entry");
-            }
-            if (remaining && size > *remaining) {
-                throw std::runtime_error("serialized dictionary string exceeds remaining payload");
-            }
-            const auto value = remaining
-                                   ? detail::read_string(in, static_cast<std::size_t>(size))
-                                   : detail::read_string_incremental(in, static_cast<std::size_t>(size));
-            if (remaining) {
-                *remaining -= size;
-            }
-            if (!seen_ids.insert(id).second || !seen_values.insert(value).second) {
-                throw std::runtime_error("duplicate serialized dictionary entry");
-            }
-            items.push_back(BaseSegment::BuildItem{id, value});
-        }
-        if (version >= 3 && fingerprint(next_id, profile, items) != stored_fingerprint) {
-            throw std::runtime_error("serialized dictionary fingerprint mismatch");
-        }
+        auto snapshot = load_logical_snapshot(in);
+        StringBimap dict(0, snapshot.profile);
+        dict.next_id_ = snapshot.next_id;
 
         bool loaded_native_compact = false;
         const bool has_xcdat_sidecars =
@@ -483,24 +342,24 @@ public:
         const bool has_marisa_sidecars =
             std::filesystem::exists(detail::compact_marisa_sidecar_path(path)) &&
             std::filesystem::exists(detail::compact_ids_sidecar_path(path));
-        if ((profile == BackendProfile::CompactMemory && has_xcdat_sidecars) ||
-            ((profile == BackendProfile::CompactMemoryMarisa ||
-              profile == BackendProfile::CompactMemoryMarisaArrayMap) &&
+        if ((snapshot.profile == BackendProfile::CompactMemory && has_xcdat_sidecars) ||
+            ((snapshot.profile == BackendProfile::CompactMemoryMarisa ||
+              snapshot.profile == BackendProfile::CompactMemoryMarisaArrayMap) &&
              has_marisa_sidecars)) {
-            loaded_native_compact = dict.base_.load_native_compact_index(items, path);
+            loaded_native_compact = dict.base_.load_native_compact_index(snapshot.items, path);
         }
         if (!loaded_native_compact) {
-            dict.base_.rebuild(std::move(items));
-            if ((profile == BackendProfile::CompactMemory ||
-                 profile == BackendProfile::CompactMemoryMarisa ||
-                 profile == BackendProfile::CompactMemoryMarisaArrayMap) &&
+            dict.base_.rebuild(std::move(snapshot.items));
+            if ((snapshot.profile == BackendProfile::CompactMemory ||
+                 snapshot.profile == BackendProfile::CompactMemoryMarisa ||
+                 snapshot.profile == BackendProfile::CompactMemoryMarisaArrayMap) &&
                 dict.base_.has_native_compact_index()) {
                 dict.base_.save_native_compact_index(path);
             }
         }
         dict.delta_.clear();
         dict.tombstones_.clear();
-        dict.live_size_ = static_cast<std::size_t>(live_count);
+        dict.live_size_ = snapshot.live_size;
         return dict;
     }
 
@@ -526,6 +385,91 @@ public:
     }
 
 private:
+    struct LogicalSnapshot {
+        StringId next_id = 0;
+        BackendProfile profile = BackendProfile::FastLookup;
+        std::size_t live_size = 0;
+        std::vector<BaseSegment::BuildItem> items;
+    };
+
+    [[nodiscard]] static LogicalSnapshot load_logical_snapshot(std::istream& in) {
+        std::array<char, detail::kFileMagic.size()> magic{};
+        in.read(magic.data(), static_cast<std::streamsize>(magic.size()));
+        if (!in || magic != detail::kFileMagic) {
+            throw std::runtime_error("invalid serialized dictionary header");
+        }
+
+        const auto version = detail::read_pod<std::uint32_t>(in);
+        if (version < 1 || version > detail::kFormatVersion) {
+            throw std::runtime_error("unsupported serialized dictionary version");
+        }
+
+        LogicalSnapshot snapshot;
+        snapshot.next_id = detail::read_pod<StringId>(in);
+        if (version >= 2) {
+            snapshot.profile = require_profile(detail::read_pod<std::uint8_t>(in));
+        }
+
+        const auto live_count = detail::read_pod<std::uint64_t>(in);
+        if (live_count > snapshot.next_id) {
+            throw std::runtime_error("serialized dictionary live count exceeds its ID range");
+        }
+        snapshot.live_size = static_cast<std::size_t>(live_count);
+        const auto stored_fingerprint =
+            version >= 3 ? detail::read_pod<std::uint64_t>(in) : 0;
+
+        auto remaining = detail::remaining_bytes(in);
+        constexpr std::uint64_t kMinimumSerializedEntrySize =
+            sizeof(StringId) + sizeof(std::uint64_t) + 1;
+        if (remaining && live_count > *remaining / kMinimumSerializedEntrySize) {
+            throw std::runtime_error("serialized dictionary entry count exceeds remaining payload");
+        }
+
+        constexpr std::size_t kMaximumInitialReserve = 65536;
+        const auto reserve_count = static_cast<std::size_t>(
+            std::min<std::uint64_t>(live_count, kMaximumInitialReserve));
+        snapshot.items.reserve(reserve_count);
+        std::unordered_set<std::string> seen_values;
+        seen_values.reserve(reserve_count);
+        std::unordered_set<StringId> seen_ids;
+        seen_ids.reserve(reserve_count);
+
+        for (std::uint64_t i = 0; i < live_count; ++i) {
+            constexpr std::uint64_t kSerializedEntryHeaderSize =
+                sizeof(StringId) + sizeof(std::uint64_t);
+            if (remaining && *remaining < kSerializedEntryHeaderSize) {
+                throw std::runtime_error("serialized dictionary entry header is truncated");
+            }
+            const auto id = detail::read_pod<StringId>(in);
+            const auto size = detail::read_pod<std::uint64_t>(in);
+            if (remaining) {
+                *remaining -= kSerializedEntryHeaderSize;
+            }
+            if (id >= snapshot.next_id || size == 0 ||
+                size > std::numeric_limits<std::uint32_t>::max()) {
+                throw std::runtime_error("invalid serialized dictionary entry");
+            }
+            if (remaining && size > *remaining) {
+                throw std::runtime_error("serialized dictionary string exceeds remaining payload");
+            }
+            const auto value = remaining
+                                   ? detail::read_string(in, static_cast<std::size_t>(size))
+                                   : detail::read_string_incremental(in, static_cast<std::size_t>(size));
+            if (remaining) {
+                *remaining -= size;
+            }
+            if (!seen_ids.insert(id).second || !seen_values.insert(value).second) {
+                throw std::runtime_error("duplicate serialized dictionary entry");
+            }
+            snapshot.items.push_back(BaseSegment::BuildItem{id, value});
+        }
+        if (version >= 3 &&
+            fingerprint(snapshot.next_id, snapshot.profile, snapshot.items) != stored_fingerprint) {
+            throw std::runtime_error("serialized dictionary fingerprint mismatch");
+        }
+        return snapshot;
+    }
+
     [[nodiscard]] static BackendProfile normalize_profile(std::uint8_t raw) noexcept {
         switch (static_cast<BackendProfile>(raw)) {
             case BackendProfile::FastLookup:
