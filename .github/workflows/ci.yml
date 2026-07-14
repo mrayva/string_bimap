@@ -43,6 +43,7 @@ jobs:
           -DCMAKE_BUILD_TYPE=Release
           -DCMAKE_CXX_STANDARD=${{ matrix.standard }}
           -DCMAKE_CXX_STANDARD_REQUIRED=ON
+          -DCMAKE_CXX_FLAGS='-Wall -Wextra -Wpedantic -Werror'
           -DSTRING_BIMAP_BUILD_EXAMPLES=ON
           -DSTRING_BIMAP_BUILD_TOOLS=OFF
           -DSTRING_BIMAP_BUILD_TESTS=ON
