@@ -246,6 +246,42 @@ jobs:
           awk 'BEGIN { found = 0 } /^TOTAL/ { found = 1; gsub("%", "", $4); \
             if ($4 + 0 < 65) exit 1 } END { if (!found) exit 1 }' build/core-coverage.txt
 
+  benchmark-smoke:
+    name: Benchmark harness smoke test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Configure
+        env:
+          CC: clang-18
+          CXX: clang++-18
+        run: >-
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_CXX_STANDARD=20
+          -DCMAKE_CXX_STANDARD_REQUIRED=ON
+          -DCMAKE_CXX_FLAGS='-Wall -Wextra -Wpedantic -Werror'
+          -DSTRING_BIMAP_BUILD_EXAMPLES=OFF
+          -DSTRING_BIMAP_BUILD_TOOLS=OFF
+          -DSTRING_BIMAP_BUILD_TESTS=ON
+          -DSTRING_BIMAP_BUILD_BENCHMARKS=ON
+          -DSTRING_BIMAP_BUILD_FUZZERS=OFF
+          -DSTRING_BIMAP_USE_XCDAT=OFF
+          -DSTRING_BIMAP_USE_MARISA=OFF
+          -DSTRING_BIMAP_USE_HAT_TRIE=OFF
+          -DSTRING_BIMAP_USE_ARRAY_HASH=OFF
+          -DSTRING_BIMAP_USE_PTHASH=OFF
+
+      - name: Build benchmark
+        run: cmake --build build --target string_bimap_bench --parallel 2
+
+      - name: Run smoke scenarios
+        run: ctest --test-dir build -R string_bimap_benchmark_smoke_test --output-on-failure
+
   integrations:
     name: Integrations (${{ matrix.compiler }}, C++${{ matrix.standard }})
     runs-on: ubuntu-latest

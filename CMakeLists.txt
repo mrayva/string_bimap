@@ -262,6 +262,16 @@ if(STRING_BIMAP_BUILD_BENCHMARKS)
     add_executable(string_bimap_bench bench/string_bimap_bench.cpp)
     target_link_libraries(string_bimap_bench PRIVATE string_bimap::string_bimap)
 
+    if(STRING_BIMAP_BUILD_TESTS)
+        add_test(
+            NAME string_bimap_benchmark_smoke_test
+            COMMAND
+                ${CMAKE_COMMAND}
+                -DBENCHMARK_EXECUTABLE=$<TARGET_FILE:string_bimap_bench>
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/benchmark_smoke.cmake
+        )
+    endif()
+
     if(TARGET PTHASH)
         add_executable(string_bimap_pthash_bench bench/pthash_bimap_bench.cpp)
         target_link_libraries(string_bimap_pthash_bench PRIVATE string_bimap::string_bimap)
