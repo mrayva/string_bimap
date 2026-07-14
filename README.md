@@ -63,6 +63,8 @@ In practice, start with:
 - `save()`/`load()` preserve logical state and the selected backend profile.
 - Logical snapshots use a versioned, little-endian wire format.
 - `save(path)` writes native sidecars for the current in-memory state.
+- `save(path)` publishes the logical snapshot through same-directory temporary
+  file replacement, so write failures do not truncate an existing snapshot.
 - `load(path)` verifies native sidecars against the logical snapshot and falls
   back to a logical rebuild when they are missing, stale, or corrupt.
 - Stream `save(std::ostream&)` / `load(std::istream&)` remain logical-only.

@@ -273,15 +273,7 @@ public:
     }
 
     void save(const std::string& path) const {
-        std::ofstream out(path, std::ios::binary);
-        if (!out) {
-            throw std::runtime_error("failed to open file for dictionary serialization: " + path);
-        }
-        save(out);
-        out.close();
-        if (!out) {
-            throw std::runtime_error("failed to close dictionary serialization file: " + path);
-        }
+        detail::write_file_transactionally(path, [&](std::ostream& out) { save(out); });
 
         if (base_.has_native_compact_index()) {
             base_.save_native_compact_index(path);

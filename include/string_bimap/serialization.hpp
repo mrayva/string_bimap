@@ -140,6 +140,39 @@ inline std::optional<std::uint64_t> remaining_bytes(std::istream& in) {
     return static_cast<std::uint64_t>(end - current);
 }
 
+inline std::string transactional_temp_path(const std::string& path) {
+    return path + ".string_bimap.tmp";
+}
+
+template <class Writer>
+void write_file_transactionally(const std::string& path, Writer&& writer) {
+    const auto temp_path = transactional_temp_path(path);
+    std::error_code ec;
+    std::filesystem::remove(temp_path, ec);
+
+    try {
+        std::ofstream out(temp_path, std::ios::binary | std::ios::trunc);
+        if (!out) {
+            throw std::runtime_error("failed to open temporary snapshot file: " + temp_path);
+        }
+        writer(out);
+        out.close();
+        if (!out) {
+            throw std::runtime_error("failed to close temporary snapshot file: " + temp_path);
+        }
+
+        ec.clear();
+        std::filesystem::rename(temp_path, path, ec);
+        if (ec) {
+            throw std::runtime_error("failed to replace snapshot file: " + ec.message());
+        }
+    } catch (...) {
+        ec.clear();
+        std::filesystem::remove(temp_path, ec);
+        throw;
+    }
+}
+
 inline std::string compact_trie_sidecar_path(const std::string& path) {
     return path + ".compact.xcdat";
 }

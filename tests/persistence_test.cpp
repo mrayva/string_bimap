@@ -1,6 +1,7 @@
 #include <cstdint>
 #include <fstream>
 #include <initializer_list>
+#include <iterator>
 #include <limits>
 #include <sstream>
 #include <string>
@@ -99,6 +100,57 @@ void test_logical_wire_format_is_little_endian() {
     expect_bytes(33, {0, 0, 0, 0}, "entry ID should use little-endian encoding");
     expect_bytes(37, {1, 0, 0, 0, 0, 0, 0, 0},
                  "string size should use little-endian encoding");
+}
+
+void test_transactional_file_write_preserves_existing_file() {
+    const std::string path = "/tmp/string_bimap_transactional_write.bin";
+    const auto temp_path = string_bimap::detail::transactional_temp_path(path);
+    std::filesystem::remove(path);
+    std::filesystem::remove(temp_path);
+    {
+        std::ofstream out(path, std::ios::binary);
+        out << "original";
+    }
+
+    bool threw = false;
+    try {
+        string_bimap::detail::write_file_transactionally(path, [](std::ostream& out) {
+            out << "incomplete replacement";
+            throw std::runtime_error("injected write failure");
+        });
+    } catch (const std::runtime_error&) {
+        threw = true;
+    }
+    expect(threw, "transactional writer should propagate write failures");
+
+    std::ifstream in(path, std::ios::binary);
+    const std::string contents{std::istreambuf_iterator<char>(in),
+                               std::istreambuf_iterator<char>()};
+    expect(contents == "original", "failed replacement should preserve the existing file");
+    expect(!std::filesystem::exists(temp_path), "failed replacement should remove its temporary file");
+
+    std::filesystem::remove(path);
+}
+
+void test_save_replaces_logical_snapshot_transactionally() {
+    const std::string path = "/tmp/string_bimap_transactional_save.bin";
+    remove_all_sidecars(path);
+
+    StringBimap original;
+    (void)original.insert("original");
+    original.save(path);
+
+    StringBimap replacement;
+    const auto replacement_id = replacement.insert("replacement");
+    replacement.save(path);
+
+    auto restored = StringBimap::load(path);
+    expect(!restored.contains("original"), "replacement save should discard the old logical state");
+    expect(restored.find_id("replacement") == replacement_id,
+           "replacement save should publish the new logical state");
+    expect(!std::filesystem::exists(string_bimap::detail::transactional_temp_path(path)),
+           "successful replacement should not leave a temporary file");
+    remove_all_sidecars(path);
 }
 
 void test_serialization_round_trip_file(BackendProfile profile) {
@@ -372,6 +424,8 @@ int main() {
         test_native_snapshot_round_trip_file(profile);
     });
     test_logical_wire_format_is_little_endian();
+    test_transactional_file_write_preserves_existing_file();
+    test_save_replaces_logical_snapshot_transactionally();
     test_compact_native_sidecars();
     test_save_compacted_preserves_ids_and_sidecars();
     test_stale_native_and_compact_sidecars_fall_back();
